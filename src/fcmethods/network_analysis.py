@@ -180,6 +180,7 @@ def get_bids_files(
     network_label: str,
     subjects: Optional[List[str]] = None,
     tasks: Optional[List[str]] = None,
+    verbose: bool = False,
 ) -> Dict[str, Dict[str, Path]]:
     """
     Find timeseries files in a BIDS directory.
@@ -196,6 +197,8 @@ def get_bids_files(
     tasks : list, optional
         List of task labels to include (e.g., ["rest-drug", "rest-placebo"]).
         If None, includes all tasks
+    verbose : bool, optional
+        If True, print debug info about file discovery. Default: False
     
     Returns
     -------
@@ -222,7 +225,9 @@ def get_bids_files(
         files[sub_id] = {}
         
         # Find all timeseries files in func subdirectory (recursive to handle sessions)
+        found_any = False
         for ts_file in sorted(sub_dir.glob("**/stat-mean_timeseries.tsv")):
+            found_any = True
             # Extract task from filename
             filename = ts_file.stem
             # Assuming filename like: sub-XXX_task-rest-drug_desc-XXX_stat-mean_timeseries
@@ -234,6 +239,8 @@ def get_bids_files(
                     break
             
             if task is None:
+                if verbose:
+                    print(f"  DEBUG: sub-{sub_id}: Found TSV but could not extract task from {ts_file.name}")
                 continue
             
             # Filter by tasks if specified
@@ -241,6 +248,9 @@ def get_bids_files(
                 continue
             
             files[sub_id][task] = ts_file
+        
+        if verbose and not found_any:
+            print(f"  DEBUG: sub-{sub_id}: No TSV files matching pattern **/stat-mean_timeseries.tsv in {sub_dir}")
     
     return files
 

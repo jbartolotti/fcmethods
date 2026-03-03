@@ -235,7 +235,7 @@ def compute_group_correlation_matrices(
     
     # Find timeseries files in BIDS directory
     try:
-        bids_files = get_bids_files(bids_root, network_label, subjects=subjects, tasks=tasks)
+        bids_files = get_bids_files(bids_root, network_label, subjects=subjects, tasks=tasks, verbose=verbose)
     except FileNotFoundError as e:
         print(f"✗ ERROR: {e}")
         raise
