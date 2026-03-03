@@ -131,6 +131,9 @@ def export_timecourses_to_bids(
     if dry_run:
         print("[DRY RUN MODE] The following files would be written:\n")
     
+    # Track if we've printed a sample preview
+    sample_printed = False
+    
     # Group by subject
     for subnum, group_data in preamble.groupby("subnum"):
         # Get indices for this subject
@@ -154,42 +157,67 @@ def export_timecourses_to_bids(
                                   subject_timecourses.reset_index(drop=True)], 
                                  axis=1)
         
-        # Generate filename
-        if file_format in ["tsv", "csv"]:
-            delimiter = "\t" if file_format == "tsv" else ","
-            output_file = output_dir / f"sub-{subnum}_{filename_prefix}.{file_format}"
+        # Group by session and condition for file output
+        for (session, condition), session_cond_data in output_data.groupby(["run", "condition"], dropna=False):
+            # Build filename components
+            filename_parts = [f"sub-{subnum}"]
             
-            if not dry_run:
-                output_data.to_csv(output_file, sep=delimiter, index=False, na_rep="n/a")
-            else:
-                print(f"  {output_file}")
+            # Add session if available and not null
+            if "run" in output_data.columns and pd.notna(session):
+                filename_parts.append(f"ses-{session}")
             
-            output_files[str(subnum)] = [str(output_file)]
+            # Add condition if available and not null
+            if "condition" in output_data.columns and pd.notna(condition):
+                filename_parts.append(f"cond-{condition}")
             
-        elif file_format == "npy":
-            # Save as numpy array (only timecourse data)
-            output_file = output_dir / f"sub-{subnum}_{filename_prefix}.npy"
-            metadata_file = output_dir / f"sub-{subnum}_{filename_prefix}_info.csv"
+            filename_parts.append(filename_prefix)
+            base_filename = "_".join(filename_parts)
             
-            if not dry_run:
-                np.save(output_file, subject_timecourses.values)
+            # Generate filename
+            if file_format in ["tsv", "csv"]:
+                delimiter = "\t" if file_format == "tsv" else ","
+                output_file = output_dir / f"{base_filename}.{file_format}"
                 
-                # Also save a metadata file with column names and preamble
-                info_data = pd.DataFrame({
-                    "roi": timecourse_cols,
-                })
-                info_data.to_csv(metadata_file, index=False)
-            else:
-                print(f"  {output_file}")
-                print(f"  {metadata_file}")
+                if not dry_run:
+                    session_cond_data.to_csv(output_file, sep=delimiter, index=False, na_rep="n/a")
+                else:
+                    print(f"  {output_file}")
+                    
+                    # Print sample data for the first file in dry-run
+                    if not sample_printed:
+                        print(f"\n    Sample of first file (first 2 lines):")
+                        sample_lines = session_cond_data.head(2)
+                        for idx, row in sample_lines.iterrows():
+                            print(f"      {row.to_dict()}")
+                        sample_printed = True
+                        print()
+                
+                output_files[str(subnum)] = [str(output_file)]
+                
+            elif file_format == "npy":
+                # Save as numpy array (only timecourse data)
+                output_file = output_dir / f"{base_filename}.npy"
+                metadata_file = output_dir / f"{base_filename}_info.csv"
+                
+                if not dry_run:
+                    np.save(output_file, session_cond_data[timecourse_cols].values)
+                    
+                    # Also save a metadata file with column names and preamble
+                    info_data = pd.DataFrame({
+                        "roi": timecourse_cols,
+                    })
+                    info_data.to_csv(metadata_file, index=False)
+                else:
+                    print(f"  {output_file}")
+                    print(f"  {metadata_file}")
+                
+                output_files[str(subnum)] = [str(output_file), str(metadata_file)]
             
-            output_files[str(subnum)] = [str(output_file), str(metadata_file)]
-        
-        else:
-            raise ValueError(f"Unsupported file_format: {file_format}. Use 'tsv', 'csv', or 'npy'.")
+            else:
+                raise ValueError(f"Unsupported file_format: {file_format}. Use 'tsv', 'csv', or 'npy'.")
     
     if dry_run:
-        print(f"\n[DRY RUN MODE] Would export timecourses for {len(output_files)} subjects.")
+        print(f"[DRY RUN MODE] Would export timecourses for {len(output_files)} subjects.")
     
     return output_files
 
