@@ -297,6 +297,3 @@ def compute_group_correlation_matrices(
         print("=" * 80)
     
     return output_files
-        print("=" * 80)
-    
-    return output_files
