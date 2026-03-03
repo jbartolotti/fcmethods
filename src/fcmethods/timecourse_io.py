@@ -62,7 +62,7 @@ def export_timecourses_to_bids(
     bids_root: str,
     network_label: str,
     preamble_cols: Optional[List[str]] = None,
-    filename_prefix: str = "timeseries",
+    filename_prefix: str = "stat-mean_timeseries",
     file_format: str = "tsv",
     create_derivatives_subdir: bool = True,
     dry_run: bool = False,
@@ -72,6 +72,7 @@ def export_timecourses_to_bids(
     condition_to_task_mapping: Optional[Dict[str, str]] = None,
     processing_description: Optional[str] = None,
     output_subdir: str = "func",
+    censor_convention: str = "standard",
 ) -> Dict[str, List[str]]:
     """
     Export timecourse data from CSV to BIDS-compliant derivative structure.
@@ -94,7 +95,8 @@ def export_timecourses_to_bids(
     preamble_cols : list, optional
         Column names for metadata. Default: ["slicenum", "condition", "subnum", "run", "time", "censor", "subgroup"]
     filename_prefix : str, optional
-        Descriptor for output files (e.g., "timeseries", "confounds"). Default: "timeseries"
+        Descriptor for output files (e.g., "stat-mean_timeseries", "confounds"). 
+        Default: "stat-mean_timeseries"
     file_format : str, optional
         Output format: "tsv", "csv", or "npy". Default: "tsv"
     create_derivatives_subdir : bool, optional
@@ -117,6 +119,11 @@ def export_timecourses_to_bids(
         Description of processing steps applied to timecourses
     output_subdir : str, optional
         Subdirectory for output files (e.g., "func", "timeseries"). Default: "func"
+    censor_convention : str, optional
+        Convention used for the censor column. Options:
+        - "standard": 1=censored/excluded, 0=retained (BIDS default)
+        - "inverted": 1=retained, 0=censored/excluded
+        Default: "standard"
     
     Returns
     -------
@@ -294,7 +301,10 @@ def export_timecourses_to_bids(
             if "slicenum" in tsv_columns:
                 json_metadata["Columns"]["slicenum"] = "Timepoint index (0-based or 1-based)"
             if "censor" in tsv_columns:
-                json_metadata["Columns"]["censor"] = "Censoring flag (1=censored/excluded, 0=included)"
+                if censor_convention == "inverted":
+                    json_metadata["Columns"]["censor"] = "Retention flag (1=retained, 0=censored/excluded)"
+                else:
+                    json_metadata["Columns"]["censor"] = "Censoring flag (1=censored/excluded, 0=retained)"
             
             for roi in timecourse_cols:
                 json_metadata["Columns"][roi] = f"Mean timeseries from {roi} ROI"

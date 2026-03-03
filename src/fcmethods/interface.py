@@ -16,7 +16,7 @@ def export_timecourses_to_bids_with_reporting(
     bids_root: str,
     network_label: str,
     preamble_cols: Optional[List[str]] = None,
-    filename_prefix: str = "timeseries",
+    filename_prefix: str = "stat-mean_timeseries",
     file_format: str = "tsv",
     create_derivatives_subdir: bool = True,
     dry_run: bool = False,
@@ -26,6 +26,7 @@ def export_timecourses_to_bids_with_reporting(
     condition_to_task_mapping: Optional[Dict[str, str]] = None,
     processing_description: Optional[str] = None,
     output_subdir: str = "func",
+    censor_convention: str = "standard",
     verbose: bool = True,
 ) -> Dict[str, List[str]]:
     """
@@ -46,7 +47,8 @@ def export_timecourses_to_bids_with_reporting(
     preamble_cols : list, optional
         Column names for metadata. Default: ["slicenum", "condition", "subnum", "run", "time", "censor", "subgroup"]
     filename_prefix : str, optional
-        Descriptor for output files (e.g., "timeseries", "confounds"). Default: "timeseries"
+        Descriptor for output files (e.g., "stat-mean_timeseries", "confounds"). 
+        Default: "stat-mean_timeseries"
     file_format : str, optional
         Output format: "tsv", "csv", or "npy". Default: "tsv"
     create_derivatives_subdir : bool, optional
@@ -67,6 +69,13 @@ def export_timecourses_to_bids_with_reporting(
         If provided, will override task_label based on condition column values.
     processing_description : str, optional
         Description of processing steps applied to timecourses
+    output_subdir : str, optional
+        Subdirectory for output files (e.g., "func", "timeseries"). Default: "func"
+    censor_convention : str, optional
+        Convention used for the censor column. Options:
+        - "standard": 1=censored/excluded, 0=retained (BIDS default)
+        - "inverted": 1=retained, 0=censored/excluded
+        Default: "standard"
     output_subdir : str, optional
         Subdirectory for output files (e.g., "func", "timeseries"). Default: "func"
     verbose : bool, optional
@@ -130,6 +139,7 @@ def export_timecourses_to_bids_with_reporting(
         condition_to_task_mapping=condition_to_task_mapping,
         processing_description=processing_description,
         output_subdir=output_subdir,
+        censor_convention=censor_convention,
     )
     
     # Print summary
