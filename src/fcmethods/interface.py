@@ -166,7 +166,6 @@ def export_timecourses_to_bids_with_reporting(
 def compute_group_correlation_matrices(
     bids_root: str,
     network_label: str,
-    output_root: str,
     subjects: Optional[List[str]] = None,
     tasks: Optional[List[str]] = None,
     intervention_label: Optional[str] = None,
@@ -182,7 +181,7 @@ def compute_group_correlation_matrices(
     3. Computes Pearson correlation matrix
     4. Applies Fisher z-transform
     5. Computes difference matrix (intervention - control) if both tasks present
-    6. Saves outputs to derivatives
+    6. Saves outputs to {bids_root}/derivatives/fcmethods/
     
     Parameters
     ----------
@@ -190,8 +189,6 @@ def compute_group_correlation_matrices(
         Root of the BIDS dataset
     network_label : str
         Network label (e.g., "cc200", "default")
-    output_root : str
-        Root directory for output correlation matrices
     subjects : list, optional
         List of subject IDs to process (e.g., ["2002", "2003"]).
         If None, processes all subjects
@@ -218,12 +215,15 @@ def compute_group_correlation_matrices(
     >>> output_files = compute_group_correlation_matrices(
     ...     bids_root="/path/to/BIDS",
     ...     network_label="cc200",
-    ...     output_root="/path/to/output",
     ...     subjects=["2002", "2003"],
     ...     intervention_label="rest-drug",
     ...     control_label="rest-placebo"
     ... )
     """
+    
+    # Derive output root from BIDS structure
+    bids_root_path = Path(bids_root)
+    output_root = bids_root_path / "derivatives" / "fcmethods"
     
     if verbose:
         print("=" * 80)
@@ -231,7 +231,7 @@ def compute_group_correlation_matrices(
         print("=" * 80)
         print(f"\nBIDS root: {bids_root}")
         print(f"Network label: {network_label}")
-        print(f"Output root: {output_root}\n")
+        print(f"Output location: {output_root}\n")
     
     # Find timeseries files in BIDS directory
     try:
@@ -244,7 +244,6 @@ def compute_group_correlation_matrices(
         total_subs = len(bids_files)
         print(f"Found {total_subs} subject(s) with timeseries data")
     
-    output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     
     output_files = {}
