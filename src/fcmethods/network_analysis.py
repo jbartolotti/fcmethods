@@ -221,8 +221,8 @@ def get_bids_files(
         
         files[sub_id] = {}
         
-        # Find all timeseries files in func subdirectory
-        for ts_file in sorted(sub_dir.glob("*/stat-mean_timeseries.tsv")):
+        # Find all timeseries files in func subdirectory (recursive to handle sessions)
+        for ts_file in sorted(sub_dir.glob("**/stat-mean_timeseries.tsv")):
             # Extract task from filename
             filename = ts_file.stem
             # Assuming filename like: sub-XXX_task-rest-drug_desc-XXX_stat-mean_timeseries

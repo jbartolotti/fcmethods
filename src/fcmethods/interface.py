@@ -249,13 +249,16 @@ def compute_group_correlation_matrices(
     output_files = {}
     completed = 0
     
+    # Build expected search path for logging
+    search_path = Path(bids_root) / "derivatives" / network_label / "sub-{id}/*/func/"
+    
     # Process each subject
     for sub_id in sorted(bids_files.keys()):
         subject_tasks = bids_files[sub_id]
         
         if not subject_tasks:
             if verbose:
-                print(f"  ⊘ sub-{sub_id}: No timeseries files found")
+                print(f"  ⊘ sub-{sub_id}: No timeseries files found in {search_path.parent.parent}/sub-{sub_id}/")
             continue
         
         # Create output directory for this subject
