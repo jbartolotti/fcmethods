@@ -90,7 +90,7 @@ def export_timecourses_to_bids(
     bids_root : str
         Root path of the BIDS dataset
     network_label : str
-        Network/parcellation label (e.g., "fcsanity", "schaefer400")
+        Network/parcellation label (e.g., "default", "schaefer400")
         Used as subdirectory in derivatives
     preamble_cols : list, optional
         Column names for metadata. Default: ["slicenum", "condition", "subnum", "run", "time", "censor", "subgroup"]
@@ -113,7 +113,7 @@ def export_timecourses_to_bids(
         Task label for BIDS filename (e.g., "rest", "nback")
     condition_to_task_mapping : dict, optional
         Dictionary mapping condition values to task labels. Example:
-        {"A": "rest-NTX", "B": "rest-PCB"}
+        {"A": "rest-drug", "B": "rest-placebo"}
         If provided, will override task_label based on condition column values.
     processing_description : str, optional
         Description of processing steps applied to timecourses
@@ -135,7 +135,7 @@ def export_timecourses_to_bids(
     >>> output_files = export_timecourses_to_bids(
     ...     csv_path="timecourses.csv",
     ...     bids_root="/path/to/BIDS",
-    ...     network_label="fcsanity",
+    ...     network_label="default",
     ...     repetition_time=2.0,
     ...     task_label="rest"
     ... )
@@ -148,7 +148,7 @@ def export_timecourses_to_bids(
     >>> output_files = export_timecourses_to_bids(
     ...     csv_path="timecourses.csv",
     ...     bids_root="/path/to/BIDS",
-    ...     network_label="fcsanity",
+    ...     network_label="default",
     ...     repetition_time=2.0,
     ...     roi_metadata=roi_meta,
     ...     dry_run=True
@@ -158,9 +158,9 @@ def export_timecourses_to_bids(
     >>> output_files = export_timecourses_to_bids(
     ...     csv_path="timecourses.csv",
     ...     bids_root="/path/to/BIDS",
-    ...     network_label="fcsanity",
+    ...     network_label="default",
     ...     repetition_time=2.0,
-    ...     condition_to_task_mapping={"A": "rest-NTX", "B": "rest-PCB"}
+    ...     condition_to_task_mapping={"A": "rest-drug", "B": "rest-placebo"}
     ... )
     """
     

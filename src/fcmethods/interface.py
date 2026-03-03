@@ -1,14 +1,18 @@
 """
-User-facing interface for timecourse export with logging and reporting.
+User-facing interface for timecourse export and network analysis with logging and reporting.
 
-This module provides high-level functions for exporting timecourses with
-comprehensive console output and error handling.
+This module provides high-level functions with comprehensive console output and
+error handling for both timecourse export and correlation matrix computation.
 """
 
 from pathlib import Path
 from typing import Optional, List, Dict
 
 from .timecourse_io import export_timecourses_to_bids
+from .network_analysis import (
+    get_bids_files,
+    compute_subject_correlation_matrices,
+)
 
 
 def export_timecourses_to_bids_with_reporting(
@@ -42,7 +46,7 @@ def export_timecourses_to_bids_with_reporting(
     bids_root : str
         Root path of the BIDS dataset
     network_label : str
-        Network/parcellation label (e.g., "fcsanity", "schaefer400")
+        Network/parcellation label (e.g., "default", "schaefer400")
         Used as subdirectory in derivatives
     preamble_cols : list, optional
         Column names for metadata. Default: ["slicenum", "condition", "subnum", "run", "time", "censor", "subgroup"]
@@ -65,7 +69,7 @@ def export_timecourses_to_bids_with_reporting(
         Task label for BIDS filename (e.g., "rest", "nback")
     condition_to_task_mapping : dict, optional
         Dictionary mapping condition values to task labels. Example:
-        {"A": "rest-NTX", "B": "rest-PCB"}
+        {"A": "rest-drug", "B": "rest-placebo"}
         If provided, will override task_label based on condition column values.
     processing_description : str, optional
         Description of processing steps applied to timecourses
@@ -96,9 +100,9 @@ def export_timecourses_to_bids_with_reporting(
     >>> output_files = export_timecourses_to_bids_with_reporting(
     ...     csv_path="timecourses.csv",
     ...     bids_root="/path/to/BIDS",
-    ...     network_label="fcsanity",
+    ...     network_label="default",
     ...     repetition_time=2.0,
-    ...     condition_to_task_mapping={"A": "rest-NTX", "B": "rest-PCB"},
+    ...     condition_to_task_mapping={"A": "rest-drug", "B": "rest-placebo"},
     ...     dry_run=True
     ... )
     """
@@ -154,6 +158,146 @@ def export_timecourses_to_bids_with_reporting(
         
         output_location = Path(bids_root) / "derivatives" / network_label
         print(f"\nOutput location: {output_location}/sub-XXXX/{output_subdir}/")
+        print("=" * 80)
+    
+    return output_files
+
+
+def compute_group_correlation_matrices(
+    bids_root: str,
+    network_label: str,
+    output_root: str,
+    subjects: Optional[List[str]] = None,
+    tasks: Optional[List[str]] = None,
+    intervention_label: Optional[str] = None,
+    control_label: Optional[str] = None,
+    verbose: bool = True,
+) -> Dict[str, Dict[str, Path]]:
+    """
+    Compute correlation matrices for all subjects in a BIDS dataset.
+    
+    For each subject and task combination, this function:
+    1. Loads the timeseries data
+    2. Removes censored timepoints
+    3. Computes Pearson correlation matrix
+    4. Applies Fisher z-transform
+    5. Computes difference matrix (intervention - control) if both tasks present
+    6. Saves outputs to derivatives
+    
+    Parameters
+    ----------
+    bids_root : str
+        Root of the BIDS dataset
+    network_label : str
+        Network label (e.g., "cc200", "default")
+    output_root : str
+        Root directory for output correlation matrices
+    subjects : list, optional
+        List of subject IDs to process (e.g., ["2002", "2003"]).
+        If None, processes all subjects
+    tasks : list, optional
+        List of task labels to process (e.g., ["rest-intervention", "rest-control"]).
+        If None, processes all available tasks
+    intervention_label : str, optional
+        Task label for intervention condition (e.g., "rest-drug").
+        If None, no intervention matrix will be computed.
+    control_label : str, optional
+        Task label for control condition (e.g., "rest-placebo").
+        If None, no control matrix will be computed.
+    verbose : bool, optional
+        If True, print detailed status messages. Default: True
+    
+    Returns
+    -------
+    output_files : dict
+        Dictionary structure: {subject_id: {matrix_type: output_path}}
+        matrix_type can be: "intervention", "control", "diff"
+    
+    Examples
+    --------
+    >>> output_files = compute_group_correlation_matrices(
+    ...     bids_root="/path/to/BIDS",
+    ...     network_label="cc200",
+    ...     output_root="/path/to/output",
+    ...     subjects=["2002", "2003"],
+    ...     intervention_label="rest-drug",
+    ...     control_label="rest-placebo"
+    ... )
+    """
+    
+    if verbose:
+        print("=" * 80)
+        print("Computing Group Correlation Matrices")
+        print("=" * 80)
+        print(f"\nBIDS root: {bids_root}")
+        print(f"Network label: {network_label}")
+        print(f"Output root: {output_root}\n")
+    
+    # Find timeseries files in BIDS directory
+    try:
+        bids_files = get_bids_files(bids_root, network_label, subjects=subjects, tasks=tasks)
+    except FileNotFoundError as e:
+        print(f"✗ ERROR: {e}")
+        raise
+    
+    if verbose:
+        total_subs = len(bids_files)
+        print(f"Found {total_subs} subject(s) with timeseries data")
+    
+    output_root = Path(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+    
+    output_files = {}
+    completed = 0
+    
+    # Process each subject
+    for sub_id in sorted(bids_files.keys()):
+        subject_tasks = bids_files[sub_id]
+        
+        if not subject_tasks:
+            if verbose:
+                print(f"  ⊘ sub-{sub_id}: No timeseries files found")
+            continue
+        
+        # Create output directory for this subject
+        sub_output_dir = output_root / f"sub-{sub_id}"
+        sub_output_dir.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            # Compute correlation matrices
+            matrices = compute_subject_correlation_matrices(
+                subject_tasks,
+                output_dir=sub_output_dir,
+                z_transform=True,
+                compute_diff=True,
+                intervention_label=intervention_label,
+                control_label=control_label,
+            )
+            
+            output_files[sub_id] = {
+                matrix_type: sub_output_dir / f"corrmat_{matrix_type}.npy"
+                for matrix_type in matrices.keys()
+            }
+            
+            if verbose:
+                matrix_types = ", ".join(matrices.keys())
+                print(f"  ✓ sub-{sub_id}: {matrix_types}")
+            
+            completed += 1
+            
+        except Exception as e:
+            if verbose:
+                print(f"  ✗ sub-{sub_id}: {e}")
+            continue
+    
+    # Summary
+    if verbose:
+        print("\n" + "=" * 80)
+        print(f"✓ COMPLETE: Processed {completed}/{total_subs} subjects")
+        print(f"Output location: {output_root}/sub-XXXX/corrmat_*.npy")
+        print("=" * 80)
+    
+    return output_files
         print("=" * 80)
     
     return output_files
