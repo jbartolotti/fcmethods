@@ -13,6 +13,10 @@ from .network_analysis import (
     get_bids_files,
     compute_subject_correlation_matrices,
 )
+from .visualization import (
+    visualize_subject_corrmat,
+    visualize_group_corrmat,
+)
 
 
 def export_timecourses_to_bids_with_reporting(
@@ -295,6 +299,144 @@ def compute_group_correlation_matrices(
         print("\n" + "=" * 80)
         print(f"✓ COMPLETE: Processed {completed}/{total_subs} subjects")
         print(f"Output location: {output_root}/sub-XXXX/corrmat_*.npy")
+        print("=" * 80)
+    
+    return output_files
+
+
+def visualize_correlation_matrices(
+    output_root: str,
+    subjects: Optional[List[str]] = None,
+    roi_labels: Optional[List[str]] = None,
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
+    cmap: str = "RdBu_r",
+    figsize: tuple = (15, 5),
+    dpi: int = 150,
+    verbose: bool = True,
+) -> Dict[str, Path]:
+    """
+    Create and save heatmap visualizations for correlation matrices.
+    
+    Generates individual subject heatmaps and a group-averaged heatmap.
+    Diagonal is removed (set to NaN) before plotting to avoid affecting color scale.
+    
+    Parameters
+    ----------
+    output_root : str
+        Root directory containing sub-*/corrmat_*.npy files
+    subjects : list, optional
+        List of subject IDs to visualize (e.g., ["2002", "2003"]).
+        If None, visualizes all subjects with correlation matrices
+    roi_labels : list, optional
+        Labels for ROIs (rows/columns of heatmaps). If None, uses numeric indices
+    vmin, vmax : float, optional
+        Color scale limits. If None, computed from data (1st and 99th percentiles)
+    cmap : str, optional
+        Colormap name (default: "RdBu_r")
+    figsize : tuple, optional
+        Figure size (width, height). Default: (15, 5)
+    dpi : int, optional
+        DPI for saved figures. Default: 150
+    verbose : bool, optional
+        If True, print progress messages. Default: True
+    
+    Returns
+    -------
+    output_files : dict
+        Dictionary mapping "group" and subject IDs to paths of saved figures
+    
+    Examples
+    --------
+    >>> output_files = visualize_correlation_matrices(
+    ...     output_root="/path/to/BIDS/derivatives/fcmethods",
+    ...     roi_labels=["ROI1", "ROI2", "ROI3"],
+    ...     cmap="RdBu_r"
+    ... )
+    >>> print(f"Saved {len(output_files)} visualizations")
+    """
+    
+    if verbose:
+        print("=" * 80)
+        print("Visualizing Correlation Matrices")
+        print("=" * 80)
+        print(f"\nOutput root: {output_root}\n")
+    
+    output_root = Path(output_root)
+    output_files = {}
+    
+    # Find all subjects if not specified
+    if subjects is None:
+        subject_dirs = sorted(output_root.glob("sub-*"))
+        subjects = [d.name.replace("sub-", "") for d in subject_dirs]
+    
+    if verbose:
+        print(f"Visualizing {len(subjects)} subject(s)")
+    
+    # Create individual subject visualizations
+    completed = 0
+    for sub_id in sorted(subjects):
+        sub_dir = output_root / f"sub-{sub_id}"
+        
+        if not sub_dir.exists():
+            if verbose:
+                print(f"  ⊘ sub-{sub_id}: Directory not found")
+            continue
+        
+        try:
+            fig_path = visualize_subject_corrmat(
+                subject_id=sub_id,
+                output_dir=sub_dir,
+                output_root=output_root,
+                roi_labels=roi_labels,
+                vmin=vmin,
+                vmax=vmax,
+                cmap=cmap,
+                figsize=figsize,
+                dpi=dpi,
+            )
+            
+            if fig_path is not None:
+                output_files[f"sub-{sub_id}"] = fig_path
+                if verbose:
+                    print(f"  ✓ sub-{sub_id}: {fig_path.name}")
+                completed += 1
+            else:
+                if verbose:
+                    print(f"  ⊘ sub-{sub_id}: No correlation matrices found")
+        
+        except Exception as e:
+            if verbose:
+                print(f"  ✗ sub-{sub_id}: {e}")
+            continue
+    
+    # Create group visualization
+    try:
+        group_fig_path = visualize_group_corrmat(
+            output_root=output_root,
+            subjects=subjects,
+            roi_labels=roi_labels,
+            cmap=cmap,
+            figsize=figsize,
+            dpi=dpi,
+        )
+        
+        if group_fig_path is not None:
+            output_files["group"] = group_fig_path
+            if verbose:
+                print(f"\n  ✓ Group average: {group_fig_path.name}")
+    
+    except Exception as e:
+        if verbose:
+            print(f"\n  ✗ Group average: {e}")
+    
+    # Summary
+    if verbose:
+        print("\n" + "=" * 80)
+        print(f"✓ COMPLETE: Created {completed} subject visualization(s)")
+        if "group" in output_files:
+            print(f"           + 1 group visualization")
+        print(f"\nOutput location: {output_root}/figures/")
         print("=" * 80)
     
     return output_files

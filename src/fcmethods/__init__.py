@@ -9,6 +9,7 @@ from .timecourse_io import (
 from .interface import (
     export_timecourses_to_bids_with_reporting,
     compute_group_correlation_matrices,
+    visualize_correlation_matrices,
 )
 from .network_analysis import (
     fisher_z_transform,
@@ -17,6 +18,12 @@ from .network_analysis import (
     compute_correlation_matrix,
     get_bids_files,
     compute_subject_correlation_matrices,
+)
+from .visualization import (
+    plot_correlation_matrices,
+    visualize_subject_corrmat,
+    visualize_group_corrmat,
+    remove_diagonal,
 )
 
 __version__ = "0.1.0"
@@ -31,4 +38,9 @@ __all__ = [
     "get_bids_files",
     "compute_subject_correlation_matrices",
     "compute_group_correlation_matrices",
+    "plot_correlation_matrices",
+    "visualize_subject_corrmat",
+    "visualize_group_corrmat",
+    "visualize_correlation_matrices",
+    "remove_diagonal",
 ]
