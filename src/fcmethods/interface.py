@@ -30,6 +30,7 @@ from .graph_analysis import (
     compute_auc_by_group,
     save_graph_outputs,
 )
+from .graph_visualization import create_graph_metric_summary_figures
 
 
 def _infer_roi_labels_from_corrmat_json(
@@ -1030,5 +1031,63 @@ def compute_graph_metrics_from_corrmats(
         for key, value in output_files.items():
             print(f"  {key}: {value.name}")
         print("=" * 80)
+
+    return output_files
+
+
+def visualize_graph_metrics(
+    output_root: str,
+    participants_group_column: Optional[str] = None,
+    matrix_types: Optional[List[str]] = None,
+    matrix_display_names: Optional[Dict[str, str]] = None,
+    dpi: int = 150,
+    verbose: bool = True,
+) -> Dict[str, Path]:
+    """
+    Create summary dot+box figures for graph metrics outputs.
+
+    Generates, for each metric:
+    - intervention/control figure
+    - subgroup-stratified figure (if participants_group_column is provided)
+
+    Parameters
+    ----------
+    output_root : str
+        Root fcmethods output directory containing graph metrics in graph/
+    participants_group_column : str, optional
+        Group column name present in graph TSV outputs (from participants.tsv)
+    matrix_types : list, optional
+        Matrix types/conditions to plot. Default: ["intervention", "control"]
+    matrix_display_names : dict, optional
+        Display names for matrix types (e.g., {"intervention": "NTX", "control": "Placebo"})
+    dpi : int, optional
+        Figure DPI. Default: 150
+    verbose : bool, optional
+        Print progress messages. Default: True
+
+    Returns
+    -------
+    output_files : dict
+        Mapping of figure keys to saved paths.
+    """
+    graph_dir = Path(output_root) / "graph"
+
+    if verbose:
+        print("=" * 80)
+        print("Visualizing Graph Metrics")
+        print("=" * 80)
+        print(f"\nGraph directory: {graph_dir}\n")
+
+    output_files = create_graph_metric_summary_figures(
+        graph_dir=graph_dir,
+        participants_group_column=participants_group_column,
+        matrix_types=matrix_types,
+        matrix_display_names=matrix_display_names,
+        dpi=dpi,
+    )
+
+    if verbose:
+        print(f"✓ COMPLETE: Created {len(output_files)} graph summary figure(s)")
+        print(f"Output location: {graph_dir / 'figures'}")
 
     return output_files

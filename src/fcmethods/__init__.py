@@ -11,6 +11,7 @@ from .interface import (
     compute_group_correlation_matrices,
     visualize_correlation_matrices,
     compute_graph_metrics_from_corrmats,
+    visualize_graph_metrics,
 )
 from .network_analysis import (
     fisher_z_transform,
@@ -32,6 +33,7 @@ from .graph_analysis import (
     compute_network_graph_metrics,
     compute_auc_by_group,
 )
+from .graph_visualization import create_graph_metric_summary_figures
 
 __version__ = "0.1.0"
 __all__ = [
@@ -46,6 +48,7 @@ __all__ = [
     "compute_subject_correlation_matrices",
     "compute_group_correlation_matrices",
     "compute_graph_metrics_from_corrmats",
+    "visualize_graph_metrics",
     "plot_correlation_matrices",
     "visualize_subject_corrmat",
     "visualize_group_corrmat",
@@ -55,4 +58,5 @@ __all__ = [
     "compute_node_graph_metrics",
     "compute_network_graph_metrics",
     "compute_auc_by_group",
+    "create_graph_metric_summary_figures",
 ]
