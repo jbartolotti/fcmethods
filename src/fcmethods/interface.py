@@ -5,6 +5,7 @@ This module provides high-level functions with comprehensive console output and
 error handling for both timecourse export and correlation matrix computation.
 """
 
+import json
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -17,6 +18,60 @@ from .visualization import (
     visualize_subject_corrmat,
     visualize_group_corrmat,
 )
+
+
+def _infer_roi_labels_from_corrmat_json(
+    output_root: Path,
+    subjects: List[str],
+) -> Optional[List[str]]:
+    """Infer ROI labels from a subject corrmat/cormat JSON sidecar."""
+    candidate_filenames = [
+        "corrmat_control.json",
+        "corrmat_intervention.json",
+        "corrmat_diff.json",
+        "cormat_control.json",
+        "cormat_intervention.json",
+        "cormat_diff.json",
+    ]
+
+    for sub_id in subjects:
+        sub_dir = output_root / f"sub-{sub_id}"
+        if not sub_dir.exists():
+            continue
+
+        # Try expected names first
+        for filename in candidate_filenames:
+            json_path = sub_dir / filename
+            if not json_path.exists():
+                continue
+
+            try:
+                with open(json_path, "r") as f:
+                    metadata = json.load(f)
+                rois = metadata.get("ROIs")
+            except Exception:
+                continue
+
+            if isinstance(rois, list) and rois:
+                return [str(roi) for roi in rois]
+            if isinstance(rois, dict) and rois:
+                return [str(roi) for roi in rois.keys()]
+
+        # Fallback: any matching corrmat/cormat JSON in subject directory
+        for json_path in sorted(sub_dir.glob("*cor*mat*.json")):
+            try:
+                with open(json_path, "r") as f:
+                    metadata = json.load(f)
+                rois = metadata.get("ROIs")
+            except Exception:
+                continue
+
+            if isinstance(rois, list) and rois:
+                return [str(roi) for roi in rois]
+            if isinstance(rois, dict) and rois:
+                return [str(roi) for roi in rois.keys()]
+
+    return None
 
 
 def export_timecourses_to_bids_with_reporting(
@@ -308,6 +363,7 @@ def visualize_correlation_matrices(
     output_root: str,
     subjects: Optional[List[str]] = None,
     roi_labels: Optional[List[str]] = None,
+    roi_clusters: Optional[Dict[str, List[str]]] = None,
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
     cmap: str = "RdBu_r",
@@ -329,7 +385,14 @@ def visualize_correlation_matrices(
         List of subject IDs to visualize (e.g., ["2002", "2003"]).
         If None, visualizes all subjects with correlation matrices
     roi_labels : list, optional
-        Labels for ROIs (rows/columns of heatmaps). If None, uses numeric indices
+        Labels for ROIs (rows/columns of heatmaps). If None, attempts to infer
+        labels from sub-*/corrmat_*.json (or cormat_*.json) sidecars via the
+        "ROIs" field; if not found, falls back to numeric indices.
+    roi_clusters : dict, optional
+        ROI cluster definitions as {cluster_name: [roi1, roi2, ...]}.
+        Draws dark boundary lines between adjacent ROIs that belong to
+        different clusters. Hemisphere-prefixed ROI labels (e.g., L_roi, R_roi)
+        are matched when clusters are defined without prefix.
     vmin, vmax : float, optional
         Color scale limits. If None, computed from data (1st and 99th percentiles)
     cmap : str, optional
@@ -369,6 +432,16 @@ def visualize_correlation_matrices(
     if subjects is None:
         subject_dirs = sorted(output_root.glob("sub-*"))
         subjects = [d.name.replace("sub-", "") for d in subject_dirs]
+
+    # Auto-infer ROI labels from JSON sidecars if not provided
+    if roi_labels is None:
+        inferred_roi_labels = _infer_roi_labels_from_corrmat_json(output_root, subjects)
+        if inferred_roi_labels is not None:
+            roi_labels = inferred_roi_labels
+            if verbose:
+                print(f"Inferred ROI labels from JSON sidecar ({len(roi_labels)} labels)")
+        elif verbose:
+            print("Could not infer ROI labels from JSON sidecars; using numeric indices")
     
     if verbose:
         print(f"Visualizing {len(subjects)} subject(s)")
@@ -389,6 +462,7 @@ def visualize_correlation_matrices(
                 output_dir=sub_dir,
                 output_root=output_root,
                 roi_labels=roi_labels,
+                roi_clusters=roi_clusters,
                 vmin=vmin,
                 vmax=vmax,
                 cmap=cmap,
@@ -416,6 +490,7 @@ def visualize_correlation_matrices(
             output_root=output_root,
             subjects=subjects,
             roi_labels=roi_labels,
+            roi_clusters=roi_clusters,
             cmap=cmap,
             figsize=figsize,
             dpi=dpi,
