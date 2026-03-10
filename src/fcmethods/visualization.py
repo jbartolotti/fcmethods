@@ -133,8 +133,10 @@ def plot_correlation_matrices(
     matrices: Dict[str, np.ndarray],
     roi_labels: Optional[List[str]] = None,
     roi_clusters: Optional[Dict[str, List[str]]] = None,
+    matrix_display_names: Optional[Dict[str, str]] = None,
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
+    symmetric_color_scale: bool = False,
     cmap: str = "RdBu_r",
     figsize: tuple = (15, 5),
     title_prefix: str = "",
@@ -154,8 +156,14 @@ def plot_correlation_matrices(
         Cluster boundaries are drawn as black lines where adjacent ROIs belong
         to different clusters. Matching is hemisphere-aware: labels like L_X
         and R_X both match cluster ROI "X".
+    matrix_display_names : dict, optional
+        Display-name mapping for matrix panels, e.g.
+        {"intervention": "Drug", "control": "Placebo", "diff": "Drug - Placebo"}.
     vmin, vmax : float, optional
         Color scale limits. If None, computed from data
+    symmetric_color_scale : bool, optional
+        If True, enforce color limits to be symmetric around zero so that zero
+        maps to the center of a diverging colormap. Default: False.
     cmap : str, optional
         Colormap name (default: "RdBu_r")
     figsize : tuple, optional
@@ -205,6 +213,11 @@ def plot_correlation_matrices(
             vmin = np.percentile(all_data, 1)  # Use 1st percentile to avoid outliers
         if vmax is None:
             vmax = np.percentile(all_data, 99)  # Use 99th percentile
+
+    if symmetric_color_scale:
+        abs_limit = max(abs(vmin), abs(vmax))
+        vmin = -abs_limit
+        vmax = abs_limit
     
     # Plot each matrix
     for ax, (matrix_name, matrix) in zip(axes, matrices.items()):
@@ -228,8 +241,10 @@ def plot_correlation_matrices(
         for boundary in cluster_boundaries:
             ax.axhline(boundary, color='black', linewidth=1.8, alpha=0.9)
             ax.axvline(boundary, color='black', linewidth=1.8, alpha=0.9)
+
+        display_name = matrix_display_names.get(matrix_name, matrix_name) if matrix_display_names else matrix_name
         
-        ax.set_title(f"{title_prefix}{matrix_name}" if title_prefix else matrix_name, 
+        ax.set_title(f"{title_prefix}{display_name}" if title_prefix else display_name,
                      fontsize=12, fontweight='bold')
         
         # Add colorbar
@@ -246,6 +261,7 @@ def visualize_subject_corrmat(
     output_root: Path,
     roi_labels: Optional[List[str]] = None,
     roi_clusters: Optional[Dict[str, List[str]]] = None,
+    matrix_display_names: Optional[Dict[str, str]] = None,
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
     cmap: str = "RdBu_r",
@@ -269,6 +285,8 @@ def visualize_subject_corrmat(
         Labels for ROIs. If None, uses numeric indices
     roi_clusters : dict, optional
         ROI cluster definitions for drawing boundary lines.
+    matrix_display_names : dict, optional
+        Display-name mapping for matrix panels.
     vmin, vmax : float, optional
         Color scale limits. If None, computed from data
     cmap : str, optional
@@ -300,6 +318,7 @@ def visualize_subject_corrmat(
         matrices,
         roi_labels=roi_labels,
         roi_clusters=roi_clusters,
+        matrix_display_names=matrix_display_names,
         vmin=vmin,
         vmax=vmax,
         cmap=cmap,
@@ -322,9 +341,13 @@ def visualize_group_corrmat(
     subjects: Optional[List[str]] = None,
     roi_labels: Optional[List[str]] = None,
     roi_clusters: Optional[Dict[str, List[str]]] = None,
+    matrix_display_names: Optional[Dict[str, str]] = None,
+    symmetric_color_scale: bool = True,
     cmap: str = "RdBu_r",
     figsize: tuple = (15, 5),
     dpi: int = 150,
+    output_filename: str = "group_corrmat_heatmaps.png",
+    title_prefix: str = "Group Average ",
 ) -> Optional[Path]:
     """
     Create and save a group-averaged heatmap figure.
@@ -342,12 +365,22 @@ def visualize_group_corrmat(
         Labels for ROIs. If None, uses numeric indices
     roi_clusters : dict, optional
         ROI cluster definitions for drawing boundary lines.
+    matrix_display_names : dict, optional
+        Display-name mapping for matrix panels.
+    symmetric_color_scale : bool, optional
+        If True, enforce a zero-centered symmetric color scale for the group
+        figure. Default: True.
     cmap : str, optional
         Colormap name. Default: "RdBu_r"
     figsize : tuple, optional
         Figure size. Default: (15, 5)
     dpi : int, optional
         DPI for saved figure. Default: 150
+    output_filename : str, optional
+        Output filename for the saved group figure. Default:
+        "group_corrmat_heatmaps.png".
+    title_prefix : str, optional
+        Prefix for subplot titles. Default: "Group Average ".
     
     Returns
     -------
@@ -392,15 +425,17 @@ def visualize_group_corrmat(
         avg_matrices,
         roi_labels=roi_labels,
         roi_clusters=roi_clusters,
+        matrix_display_names=matrix_display_names,
+        symmetric_color_scale=symmetric_color_scale,
         cmap=cmap,
         figsize=figsize,
-        title_prefix="Group Average ",
+        title_prefix=title_prefix,
     )
     
     # Save figure
     figures_dir = output_root / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
-    fig_path = figures_dir / "group_corrmat_heatmaps.png"
+    fig_path = figures_dir / output_filename
     fig.savefig(fig_path, dpi=dpi, bbox_inches='tight')
     plt.close(fig)
     

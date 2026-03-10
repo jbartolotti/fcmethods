@@ -6,6 +6,7 @@ error handling for both timecourse export and correlation matrix computation.
 """
 
 import json
+import csv
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -72,6 +73,85 @@ def _infer_roi_labels_from_corrmat_json(
                 return [str(roi) for roi in rois.keys()]
 
     return None
+
+
+def _normalize_subject_id(subject_id: str) -> str:
+    """Normalize subject IDs to bare numeric/string identifiers without sub- prefix."""
+    subject_id = str(subject_id).strip()
+    if subject_id.startswith("sub-"):
+        return subject_id.replace("sub-", "", 1)
+    return subject_id
+
+
+def _load_participants_rows(output_root: Path) -> Optional[List[Dict[str, str]]]:
+    """Load participants.tsv from the base BIDS directory if available."""
+    participants_path = output_root.parent.parent / "participants.tsv"
+    if not participants_path.exists():
+        return None
+
+    with open(participants_path, "r", newline="") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        return list(reader)
+
+
+def _is_include_value(value: Optional[str]) -> bool:
+    """Interpret common truthy include values from participants.tsv."""
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _get_default_subjects_and_groups(
+    output_root: Path,
+    available_subjects: List[str],
+    participants_group_column: Optional[str] = None,
+    participants_include_column: str = "include",
+) -> tuple:
+    """Resolve default subjects and optional groupings from participants.tsv."""
+    participants_rows = _load_participants_rows(output_root)
+    available_subjects_set = set(available_subjects)
+    group_assignments = {}
+
+    if not participants_rows:
+        return available_subjects, group_assignments, False, False
+
+    has_include_column = any(participants_include_column in row for row in participants_rows)
+    selected_subjects = []
+
+    for row in participants_rows:
+        participant_id = row.get("participant_id")
+        if not participant_id:
+            continue
+
+        subject_id = _normalize_subject_id(participant_id)
+        if subject_id not in available_subjects_set:
+            continue
+
+        if has_include_column and not _is_include_value(row.get(participants_include_column)):
+            continue
+
+        selected_subjects.append(subject_id)
+
+        if participants_group_column and participants_group_column in row:
+            group_value = str(row.get(participants_group_column, "")).strip()
+            if group_value:
+                group_assignments[subject_id] = group_value
+
+    if not selected_subjects:
+        return available_subjects, group_assignments, has_include_column, participants_group_column is not None
+
+    return selected_subjects, group_assignments, has_include_column, participants_group_column is not None
+
+
+def _sanitize_group_value(value: str) -> str:
+    """Convert group values to safe filename fragments."""
+    sanitized = []
+    for char in str(value):
+        if char.isalnum() or char in {"-", "_"}:
+            sanitized.append(char)
+        elif char.isspace():
+            sanitized.append("-")
+    return "".join(sanitized).strip("-") or "group"
 
 
 def export_timecourses_to_bids_with_reporting(
@@ -364,8 +444,12 @@ def visualize_correlation_matrices(
     subjects: Optional[List[str]] = None,
     roi_labels: Optional[List[str]] = None,
     roi_clusters: Optional[Dict[str, List[str]]] = None,
+    matrix_display_names: Optional[Dict[str, str]] = None,
+    participants_group_column: Optional[str] = None,
+    participants_include_column: str = "include",
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
+    group_symmetric_color_scale: bool = True,
     cmap: str = "RdBu_r",
     figsize: tuple = (15, 5),
     dpi: int = 150,
@@ -393,8 +477,22 @@ def visualize_correlation_matrices(
         Draws dark boundary lines between adjacent ROIs that belong to
         different clusters. Hemisphere-prefixed ROI labels (e.g., L_roi, R_roi)
         are matched when clusters are defined without prefix.
+    matrix_display_names : dict, optional
+        Display-name mapping for matrix panels, e.g.
+        {"intervention": "Drug", "control": "Placebo", "diff": "Drug - Placebo"}.
+    participants_group_column : str, optional
+        Column name in participants.tsv used to create additional group-average
+        figures split by group value.
+    participants_include_column : str, optional
+        Column name in participants.tsv used for default subject filtering when
+        subjects is None. If the column exists, only rows with value 1/true/yes
+        are included. Default: "include".
     vmin, vmax : float, optional
         Color scale limits. If None, computed from data (1st and 99th percentiles)
+    group_symmetric_color_scale : bool, optional
+        If True, enforce a symmetric zero-centered color scale for the group
+        figure so zero is at the white midpoint of a diverging colormap.
+        Default: True.
     cmap : str, optional
         Colormap name (default: "RdBu_r")
     figsize : tuple, optional
@@ -427,11 +525,42 @@ def visualize_correlation_matrices(
     
     output_root = Path(output_root)
     output_files = {}
-    
+
+    subject_dirs = sorted(output_root.glob("sub-*"))
+    available_subjects = [d.name.replace("sub-", "") for d in subject_dirs]
+
+    participants_group_assignments = {}
+    used_participants_defaults = False
+    used_include_filter = False
+
     # Find all subjects if not specified
     if subjects is None:
-        subject_dirs = sorted(output_root.glob("sub-*"))
-        subjects = [d.name.replace("sub-", "") for d in subject_dirs]
+        (
+            subjects,
+            participants_group_assignments,
+            used_include_filter,
+            used_participants_defaults,
+        ) = _get_default_subjects_and_groups(
+            output_root=output_root,
+            available_subjects=available_subjects,
+            participants_group_column=participants_group_column,
+            participants_include_column=participants_include_column,
+        )
+    else:
+        subjects = [_normalize_subject_id(subject_id) for subject_id in subjects]
+        participants_rows = _load_participants_rows(output_root)
+        if participants_rows and participants_group_column is not None:
+            for row in participants_rows:
+                participant_id = row.get("participant_id")
+                if not participant_id:
+                    continue
+                subject_id = _normalize_subject_id(participant_id)
+                if subject_id not in subjects:
+                    continue
+                if participants_group_column in row:
+                    group_value = str(row.get(participants_group_column, "")).strip()
+                    if group_value:
+                        participants_group_assignments[subject_id] = group_value
 
     # Auto-infer ROI labels from JSON sidecars if not provided
     if roi_labels is None:
@@ -444,6 +573,12 @@ def visualize_correlation_matrices(
             print("Could not infer ROI labels from JSON sidecars; using numeric indices")
     
     if verbose:
+        if used_participants_defaults:
+            print("Resolved default subject list from participants.tsv")
+        if used_include_filter:
+            print(f"Applied participants.tsv filter: {participants_include_column} == 1")
+        if participants_group_column is not None:
+            print(f"Group-average split column: {participants_group_column}")
         print(f"Visualizing {len(subjects)} subject(s)")
     
     # Create individual subject visualizations
@@ -463,6 +598,7 @@ def visualize_correlation_matrices(
                 output_root=output_root,
                 roi_labels=roi_labels,
                 roi_clusters=roi_clusters,
+                matrix_display_names=matrix_display_names,
                 vmin=vmin,
                 vmax=vmax,
                 cmap=cmap,
@@ -491,6 +627,8 @@ def visualize_correlation_matrices(
             subjects=subjects,
             roi_labels=roi_labels,
             roi_clusters=roi_clusters,
+            matrix_display_names=matrix_display_names,
+            symmetric_color_scale=group_symmetric_color_scale,
             cmap=cmap,
             figsize=figsize,
             dpi=dpi,
@@ -504,6 +642,46 @@ def visualize_correlation_matrices(
     except Exception as e:
         if verbose:
             print(f"\n  ✗ Group average: {e}")
+
+    # Create additional group-average visualizations split by participants.tsv group value
+    grouped_average_count = 0
+    if participants_group_column is not None:
+        group_to_subjects = {}
+        for subject_id in subjects:
+            group_value = participants_group_assignments.get(subject_id)
+            if not group_value:
+                continue
+            group_to_subjects.setdefault(group_value, []).append(subject_id)
+
+        for group_value, group_subjects in sorted(group_to_subjects.items()):
+            try:
+                safe_group_value = _sanitize_group_value(group_value)
+                group_key = f"group_{participants_group_column}_{safe_group_value}"
+                group_fig_path = visualize_group_corrmat(
+                    output_root=output_root,
+                    subjects=group_subjects,
+                    roi_labels=roi_labels,
+                    roi_clusters=roi_clusters,
+                    matrix_display_names=matrix_display_names,
+                    symmetric_color_scale=group_symmetric_color_scale,
+                    cmap=cmap,
+                    figsize=figsize,
+                    dpi=dpi,
+                    output_filename=f"group_corrmat_heatmaps_{participants_group_column}-{safe_group_value}.png",
+                    title_prefix=f"Group Average ({participants_group_column}={group_value}) ",
+                )
+
+                if group_fig_path is not None:
+                    output_files[group_key] = group_fig_path
+                    grouped_average_count += 1
+                    if verbose:
+                        print(
+                            f"  ✓ Group average {participants_group_column}={group_value}: "
+                            f"{group_fig_path.name}"
+                        )
+            except Exception as e:
+                if verbose:
+                    print(f"  ✗ Group average {participants_group_column}={group_value}: {e}")
     
     # Summary
     if verbose:
@@ -511,6 +689,8 @@ def visualize_correlation_matrices(
         print(f"✓ COMPLETE: Created {completed} subject visualization(s)")
         if "group" in output_files:
             print(f"           + 1 group visualization")
+        if grouped_average_count:
+            print(f"           + {grouped_average_count} grouped average visualization(s)")
         print(f"\nOutput location: {output_root}/figures/")
         print("=" * 80)
     
