@@ -9,6 +9,10 @@ import json
 import csv
 from pathlib import Path
 from typing import Optional, List, Dict
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
 
 from .timecourse_io import export_timecourses_to_bids
 from .network_analysis import (
@@ -18,6 +22,13 @@ from .network_analysis import (
 from .visualization import (
     visualize_subject_corrmat,
     visualize_group_corrmat,
+)
+from .graph_analysis import (
+    build_adjacency_from_corrmat,
+    compute_node_graph_metrics,
+    compute_network_graph_metrics,
+    compute_auc_by_group,
+    save_graph_outputs,
 )
 
 
@@ -694,4 +705,330 @@ def visualize_correlation_matrices(
         print(f"\nOutput location: {output_root}/figures/")
         print("=" * 80)
     
+    return output_files
+
+
+def compute_graph_metrics_from_corrmats(
+    output_root: str,
+    subjects: Optional[List[str]] = None,
+    matrix_types: Optional[List[str]] = None,
+    threshold_mode: str = "cost",
+    cost_thresholds: Optional[List[float]] = None,
+    absolute_thresholds: Optional[List[float]] = None,
+    quick: bool = False,
+    positive_only: bool = True,
+    participants_group_column: Optional[str] = None,
+    participants_include_column: str = "include",
+    save_adjacencies: bool = False,
+    verbose: bool = True,
+) -> Dict[str, Path]:
+    """
+    Compute CONN-style graph metrics from subject-level correlation matrices.
+
+    Graphs are built per subject, per matrix type, and per threshold value using
+    binary undirected adjacency matrices. Outputs are saved as TSV tables and
+    JSON sidecars suitable for downstream figures/statistical analyses.
+
+    Parameters
+    ----------
+    output_root : str
+        Root directory containing sub-*/corrmat_*.npy files
+    subjects : list, optional
+        Subject IDs to include. If None, defaults to participants.tsv-based
+        selection (include==1 when include column exists).
+    matrix_types : list, optional
+        Matrix types to process (e.g., ["intervention", "control"]).
+        Default: ["intervention", "control"]
+    threshold_mode : str, optional
+        Thresholding mode: "cost" or "absolute". Default: "cost"
+    cost_thresholds : list, optional
+        Cost thresholds (0..1) for threshold_mode="cost".
+        Default: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30]
+    absolute_thresholds : list, optional
+        Absolute thresholds for threshold_mode="absolute".
+        Default: [0.5]
+    quick : bool, optional
+        If True, force a single 10% cost threshold for quick debugging.
+        Default: False
+    positive_only : bool, optional
+        If True, only positive edges are eligible during thresholding.
+        Default: True
+    participants_group_column : str, optional
+        Optional participants.tsv column to include group labels in outputs.
+    participants_include_column : str, optional
+        participants.tsv include filter column. Default: "include"
+    save_adjacencies : bool, optional
+        If True, saves per-subject adjacency matrices under graph/sub-*/.
+        Default: False
+    verbose : bool, optional
+        Print progress messages. Default: True
+
+    Returns
+    -------
+    output_files : dict
+        Paths to generated TSV/JSON files.
+    """
+    if verbose:
+        print("=" * 80)
+        print("Computing Graph Metrics from Correlation Matrices")
+        print("=" * 80)
+        print(f"\nOutput root: {output_root}\n")
+
+    output_root = Path(output_root)
+    if not output_root.exists():
+        raise FileNotFoundError(f"Output root does not exist: {output_root}")
+
+    if matrix_types is None:
+        matrix_types = ["intervention", "control"]
+
+    subject_dirs = sorted(output_root.glob("sub-*"))
+    available_subjects = [d.name.replace("sub-", "") for d in subject_dirs]
+
+    participants_group_assignments = {}
+    used_participants_defaults = False
+    used_include_filter = False
+
+    if subjects is None:
+        (
+            subjects,
+            participants_group_assignments,
+            used_include_filter,
+            used_participants_defaults,
+        ) = _get_default_subjects_and_groups(
+            output_root=output_root,
+            available_subjects=available_subjects,
+            participants_group_column=participants_group_column,
+            participants_include_column=participants_include_column,
+        )
+    else:
+        subjects = [_normalize_subject_id(subject_id) for subject_id in subjects]
+        participants_rows = _load_participants_rows(output_root)
+        if participants_rows and participants_group_column is not None:
+            for row in participants_rows:
+                participant_id = row.get("participant_id")
+                if not participant_id:
+                    continue
+                subject_id = _normalize_subject_id(participant_id)
+                if subject_id not in subjects:
+                    continue
+                if participants_group_column in row:
+                    group_value = str(row.get(participants_group_column, "")).strip()
+                    if group_value:
+                        participants_group_assignments[subject_id] = group_value
+
+    if quick:
+        threshold_mode = "cost"
+        thresholds = [0.10]
+    else:
+        if threshold_mode == "cost":
+            thresholds = cost_thresholds if cost_thresholds is not None else [0.05, 0.10, 0.15, 0.20, 0.25, 0.30]
+        elif threshold_mode == "absolute":
+            thresholds = absolute_thresholds if absolute_thresholds is not None else [0.5]
+        else:
+            raise ValueError("threshold_mode must be 'cost' or 'absolute'")
+
+    thresholds = [float(t) for t in thresholds]
+    thresholds = sorted(thresholds)
+
+    participants_rows = _load_participants_rows(output_root)
+    participants_meta = {}
+    if participants_rows:
+        for row in participants_rows:
+            pid = row.get("participant_id")
+            if not pid:
+                continue
+            sid = _normalize_subject_id(pid)
+            participants_meta[sid] = row
+
+    if verbose:
+        if used_participants_defaults:
+            print("Resolved default subject list from participants.tsv")
+        if used_include_filter:
+            print(f"Applied participants.tsv filter: {participants_include_column} == 1")
+        print(f"Subjects included: {len(subjects)}")
+        print(f"Matrix types: {', '.join(matrix_types)}")
+        print(f"Threshold mode: {threshold_mode}")
+        print(f"Thresholds: {thresholds}")
+        if quick:
+            print("Quick mode enabled: using single cost threshold of 0.10")
+
+    node_rows = []
+    network_rows = []
+
+    total_processed = 0
+    for subject_id in sorted(subjects):
+        sub_dir = output_root / f"sub-{subject_id}"
+        if not sub_dir.exists():
+            if verbose:
+                print(f"  ⊘ sub-{subject_id}: directory not found")
+            continue
+
+        participant_id = f"sub-{subject_id}"
+        group_value = participants_group_assignments.get(subject_id)
+
+        for matrix_type in matrix_types:
+            matrix_path = sub_dir / f"corrmat_{matrix_type}.npy"
+            if not matrix_path.exists():
+                continue
+
+            matrix = np.load(matrix_path)
+
+            # Try to get ROI labels for node-level table
+            roi_labels = None
+            matrix_json = sub_dir / f"corrmat_{matrix_type}.json"
+            if matrix_json.exists():
+                try:
+                    with open(matrix_json, "r") as f:
+                        metadata = json.load(f)
+                    rois = metadata.get("ROIs")
+                    if isinstance(rois, list):
+                        roi_labels = [str(x) for x in rois]
+                except Exception:
+                    roi_labels = None
+
+            if roi_labels is None or len(roi_labels) != matrix.shape[0]:
+                roi_labels = [f"ROI_{idx + 1}" for idx in range(matrix.shape[0])]
+
+            for thr in thresholds:
+                adjacency = build_adjacency_from_corrmat(
+                    matrix=matrix,
+                    threshold_mode=threshold_mode,
+                    threshold_value=thr,
+                    positive_only=positive_only,
+                )
+
+                node_df = compute_node_graph_metrics(adjacency)
+                net_metrics = compute_network_graph_metrics(adjacency, node_metrics=node_df)
+
+                for idx, row in node_df.iterrows():
+                    out_row = {
+                        "participant_id": participant_id,
+                        "subject_id": subject_id,
+                        "matrix_type": matrix_type,
+                        "threshold_mode": threshold_mode,
+                        "threshold_value": thr,
+                        "quick": int(quick),
+                        "roi_index": int(idx),
+                        "roi": roi_labels[idx],
+                    }
+                    if participants_group_column is not None:
+                        out_row[participants_group_column] = group_value
+
+                    participant_meta = participants_meta.get(subject_id, {})
+                    for meta_key, meta_value in participant_meta.items():
+                        if meta_key not in out_row:
+                            out_row[meta_key] = meta_value
+
+                    for metric_name in node_df.columns:
+                        out_row[metric_name] = row[metric_name]
+                    node_rows.append(out_row)
+
+                net_row = {
+                    "participant_id": participant_id,
+                    "subject_id": subject_id,
+                    "matrix_type": matrix_type,
+                    "threshold_mode": threshold_mode,
+                    "threshold_value": thr,
+                    "quick": int(quick),
+                }
+                if participants_group_column is not None:
+                    net_row[participants_group_column] = group_value
+
+                participant_meta = participants_meta.get(subject_id, {})
+                for meta_key, meta_value in participant_meta.items():
+                    if meta_key not in net_row:
+                        net_row[meta_key] = meta_value
+
+                net_row.update(net_metrics)
+                network_rows.append(net_row)
+
+                if save_adjacencies:
+                    adjacency_dir = output_root / "graph" / f"sub-{subject_id}"
+                    adjacency_dir.mkdir(parents=True, exist_ok=True)
+                    thr_label = str(thr).replace(".", "p")
+                    np.save(adjacency_dir / f"adjacency_{matrix_type}_{threshold_mode}-{thr_label}.npy", adjacency)
+
+            total_processed += 1
+            if verbose:
+                print(f"  ✓ sub-{subject_id} {matrix_type}: {len(thresholds)} threshold(s)")
+
+    node_df = pd.DataFrame(node_rows)
+    network_df = pd.DataFrame(network_rows)
+
+    if node_df.empty or network_df.empty:
+        raise RuntimeError("No graph metrics were computed. Check matrix types and subject inputs.")
+
+    metric_cols = [
+        "degree",
+        "cost",
+        "avg_path_distance",
+        "clustering_coefficient",
+        "global_efficiency",
+        "local_efficiency",
+        "betweenness_centrality",
+    ]
+
+    node_auc_df = None
+    network_auc_df = None
+    if len(thresholds) > 1:
+        node_group_cols = ["participant_id", "subject_id", "matrix_type", "roi_index", "roi"]
+        network_group_cols = ["participant_id", "subject_id", "matrix_type"]
+        if participants_group_column is not None and participants_group_column in node_df.columns:
+            node_group_cols.append(participants_group_column)
+        if participants_group_column is not None and participants_group_column in network_df.columns:
+            network_group_cols.append(participants_group_column)
+
+        node_auc_df = compute_auc_by_group(
+            df=node_df,
+            threshold_col="threshold_value",
+            metric_cols=metric_cols,
+            group_cols=node_group_cols,
+        )
+        network_auc_df = compute_auc_by_group(
+            df=network_df,
+            threshold_col="threshold_value",
+            metric_cols=metric_cols,
+            group_cols=network_group_cols,
+        )
+
+    metadata = {
+        "Description": "Graph metrics computed from ROI-to-ROI correlation matrices",
+        "SourceOutputRoot": str(output_root),
+        "ThresholdMode": threshold_mode,
+        "ThresholdValues": thresholds,
+        "QuickMode": bool(quick),
+        "PositiveOnlyEdges": bool(positive_only),
+        "MatrixTypes": matrix_types,
+        "ParticipantsIncludeColumn": participants_include_column,
+        "ParticipantsGroupColumn": participants_group_column,
+        "GeneratedAt": datetime.now().isoformat(),
+        "Metrics": {
+            "degree": "Number of supra-threshold edges connected to each node",
+            "cost": "Node degree normalized by N-1",
+            "avg_path_distance": "Average shortest-path distance to reachable nodes",
+            "clustering_coefficient": "Local neighborhood edge density",
+            "global_efficiency": "Average inverse shortest-path distance to all other nodes",
+            "local_efficiency": "Global efficiency of node neighborhood subgraph",
+            "betweenness_centrality": "Proportion of shortest paths passing through each node",
+        },
+    }
+
+    graph_output_dir = output_root / "graph"
+    output_files = save_graph_outputs(
+        output_dir=graph_output_dir,
+        node_df=node_df,
+        network_df=network_df,
+        node_auc_df=node_auc_df,
+        network_auc_df=network_auc_df,
+        metadata=metadata,
+    )
+
+    if verbose:
+        print("\n" + "=" * 80)
+        print(f"✓ COMPLETE: Computed graph metrics for {total_processed} subject/matrix set(s)")
+        print(f"Output location: {graph_output_dir}")
+        for key, value in output_files.items():
+            print(f"  {key}: {value.name}")
+        print("=" * 80)
+
     return output_files

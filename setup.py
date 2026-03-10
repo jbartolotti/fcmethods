@@ -12,6 +12,7 @@ setup(
     install_requires=[
         "pandas>=1.0.0",
         "numpy>=1.18.0",
+        "scipy>=1.6.0",
     ],
     extras_require={
         "dev": ["pytest>=6.0", "black>=21.0", "flake8>=3.9"],
