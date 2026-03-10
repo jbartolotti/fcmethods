@@ -18,6 +18,16 @@ def _normalize_roi_label(label: str) -> str:
     return label_norm
 
 
+def _hemisphere_rank(label: str) -> int:
+    """Sort hemisphere labels as left, right, then non-lateralized/other."""
+    label_norm = label.strip().lower()
+    if label_norm.startswith(("l_", "lh_", "left_")):
+        return 0
+    if label_norm.startswith(("r_", "rh_", "right_")):
+        return 1
+    return 2
+
+
 def _get_cluster_boundaries(
     roi_labels: Optional[List[str]],
     roi_clusters: Optional[Dict[str, List[str]]],
@@ -44,6 +54,57 @@ def _get_cluster_boundaries(
             boundaries.append(idx + 0.5)
 
     return boundaries
+
+
+def _get_cluster_reordering(
+    roi_labels: Optional[List[str]],
+    roi_clusters: Optional[Dict[str, List[str]]],
+) -> tuple:
+    """Return reordered indices, labels, and cluster boundaries."""
+    if roi_labels is None:
+        return None, None, []
+
+    n = len(roi_labels)
+    if roi_clusters is None:
+        return list(range(n)), list(roi_labels), []
+
+    used_indices = set()
+    ordered_indices = []
+    cluster_assignments_by_index = {}
+
+    # Build cluster-ordered index list using user-provided cluster and ROI order
+    for cluster_name, cluster_rois in roi_clusters.items():
+        for cluster_roi in cluster_rois:
+            target_norm = _normalize_roi_label(cluster_roi)
+            matched = [
+                idx
+                for idx, label in enumerate(roi_labels)
+                if idx not in used_indices and _normalize_roi_label(label) == target_norm
+            ]
+
+            # Ensure deterministic hemisphere ordering: L, R, then others
+            matched = sorted(matched, key=lambda idx: (_hemisphere_rank(roi_labels[idx]), roi_labels[idx].lower()))
+
+            for idx in matched:
+                ordered_indices.append(idx)
+                used_indices.add(idx)
+                cluster_assignments_by_index[idx] = cluster_name
+
+    # Append unclustered ROIs in their original order
+    for idx in range(n):
+        if idx not in used_indices:
+            ordered_indices.append(idx)
+            cluster_assignments_by_index[idx] = "__unclustered__"
+
+    reordered_labels = [roi_labels[idx] for idx in ordered_indices]
+    reordered_cluster_assignments = [cluster_assignments_by_index[idx] for idx in ordered_indices]
+
+    boundaries = []
+    for idx in range(len(reordered_cluster_assignments) - 1):
+        if reordered_cluster_assignments[idx] != reordered_cluster_assignments[idx + 1]:
+            boundaries.append(idx + 0.5)
+
+    return ordered_indices, reordered_labels, boundaries
 
 
 def remove_diagonal(matrix: np.ndarray, set_to_nan: bool = True) -> np.ndarray:
@@ -115,9 +176,30 @@ def plot_correlation_matrices(
     if n_matrices == 1:
         axes = [axes]
     
+    # Compute a consistent ROI order from clusters (if provided)
+    matrix_shape = next(iter(matrices.values())).shape
+    n_rois = matrix_shape[0]
+
+    if roi_labels is not None and len(roi_labels) != n_rois:
+        warnings.warn(
+            f"Number of ROI labels ({len(roi_labels)}) does not match matrix size ({n_rois}); "
+            "falling back to numeric indices without clustering."
+        )
+        display_labels = None
+        reorder_indices = None
+        cluster_boundaries = []
+    else:
+        reorder_indices, display_labels, cluster_boundaries = _get_cluster_reordering(roi_labels, roi_clusters)
+
     # Compute color scale from all matrices if not provided
     if vmin is None or vmax is None:
-        all_data = np.concatenate([remove_diagonal(m).flatten() for m in matrices.values()])
+        all_data = []
+        for m in matrices.values():
+            matrix_for_scale = m
+            if reorder_indices is not None:
+                matrix_for_scale = matrix_for_scale[np.ix_(reorder_indices, reorder_indices)]
+            all_data.append(remove_diagonal(matrix_for_scale).flatten())
+        all_data = np.concatenate(all_data)
         all_data = all_data[~np.isnan(all_data)]
         if vmin is None:
             vmin = np.percentile(all_data, 1)  # Use 1st percentile to avoid outliers
@@ -125,8 +207,10 @@ def plot_correlation_matrices(
             vmax = np.percentile(all_data, 99)  # Use 99th percentile
     
     # Plot each matrix
-    cluster_boundaries = _get_cluster_boundaries(roi_labels, roi_clusters)
     for ax, (matrix_name, matrix) in zip(axes, matrices.items()):
+        if reorder_indices is not None:
+            matrix = matrix[np.ix_(reorder_indices, reorder_indices)]
+
         # Remove diagonal
         matrix_viz = remove_diagonal(matrix, set_to_nan=True)
         
@@ -134,11 +218,11 @@ def plot_correlation_matrices(
         im = ax.imshow(matrix_viz, cmap=cmap, vmin=vmin, vmax=vmax, aspect='auto')
         
         # Set labels
-        if roi_labels is not None:
-            ax.set_xticks(range(len(roi_labels)))
-            ax.set_yticks(range(len(roi_labels)))
-            ax.set_xticklabels(roi_labels, rotation=45, ha='right', fontsize=8)
-            ax.set_yticklabels(roi_labels, fontsize=8)
+        if display_labels is not None:
+            ax.set_xticks(range(len(display_labels)))
+            ax.set_yticks(range(len(display_labels)))
+            ax.set_xticklabels(display_labels, rotation=45, ha='right', fontsize=8)
+            ax.set_yticklabels(display_labels, fontsize=8)
 
         # Draw cluster boundary lines
         for boundary in cluster_boundaries:
