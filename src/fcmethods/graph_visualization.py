@@ -36,12 +36,15 @@ EDGE_PREVALENCE_LAYOUT_TYPES = [
 
 
 def _load_graph_table(graph_dir: Path, level: str) -> pd.DataFrame:
-    """Load AUC table when available, otherwise load threshold-wise table."""
+    """Load normalized AUC first, then AUC, then threshold-wise table."""
     graph_dir = Path(graph_dir)
 
+    auc_norm_path = graph_dir / f"graphmetrics_desc-{level}AUCnorm.tsv"
     auc_path = graph_dir / f"graphmetrics_desc-{level}AUC.tsv"
     raw_path = graph_dir / f"graphmetrics_desc-{level}.tsv"
 
+    if auc_norm_path.exists():
+        return pd.read_csv(auc_norm_path, sep="\t")
     if auc_path.exists():
         return pd.read_csv(auc_path, sep="\t")
     if raw_path.exists():

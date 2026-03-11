@@ -317,6 +317,8 @@ def save_graph_outputs(
     network_df: pd.DataFrame,
     node_auc_df: Optional[pd.DataFrame],
     network_auc_df: Optional[pd.DataFrame],
+    node_auc_norm_df: Optional[pd.DataFrame],
+    network_auc_norm_df: Optional[pd.DataFrame],
     metadata: Dict,
 ) -> Dict[str, Path]:
     """Save graph analysis outputs as TSV + JSON sidecars."""
@@ -350,6 +352,15 @@ def save_graph_outputs(
         outputs["node_auc_tsv"] = node_auc_tsv
         outputs["node_auc_json"] = node_auc_json
 
+    if node_auc_norm_df is not None and not node_auc_norm_df.empty:
+        node_auc_norm_tsv = output_dir / "graphmetrics_desc-nodeAUCnorm.tsv"
+        node_auc_norm_json = output_dir / "graphmetrics_desc-nodeAUCnorm.json"
+        node_auc_norm_df.to_csv(node_auc_norm_tsv, sep="\t", index=False)
+        with open(node_auc_norm_json, "w") as f:
+            json.dump({**metadata, "Level": "node", "Summary": "AUC_normalized"}, f, indent=2)
+        outputs["node_auc_norm_tsv"] = node_auc_norm_tsv
+        outputs["node_auc_norm_json"] = node_auc_norm_json
+
     if network_auc_df is not None and not network_auc_df.empty:
         network_auc_tsv = output_dir / "graphmetrics_desc-networkAUC.tsv"
         network_auc_json = output_dir / "graphmetrics_desc-networkAUC.json"
@@ -358,5 +369,14 @@ def save_graph_outputs(
             json.dump({**metadata, "Level": "network", "Summary": "AUC"}, f, indent=2)
         outputs["network_auc_tsv"] = network_auc_tsv
         outputs["network_auc_json"] = network_auc_json
+
+    if network_auc_norm_df is not None and not network_auc_norm_df.empty:
+        network_auc_norm_tsv = output_dir / "graphmetrics_desc-networkAUCnorm.tsv"
+        network_auc_norm_json = output_dir / "graphmetrics_desc-networkAUCnorm.json"
+        network_auc_norm_df.to_csv(network_auc_norm_tsv, sep="\t", index=False)
+        with open(network_auc_norm_json, "w") as f:
+            json.dump({**metadata, "Level": "network", "Summary": "AUC_normalized"}, f, indent=2)
+        outputs["network_auc_norm_tsv"] = network_auc_norm_tsv
+        outputs["network_auc_norm_json"] = network_auc_norm_json
 
     return outputs

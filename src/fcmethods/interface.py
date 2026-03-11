@@ -975,6 +975,8 @@ def compute_graph_metrics_from_corrmats(
 
     node_auc_df = None
     network_auc_df = None
+    node_auc_norm_df = None
+    network_auc_norm_df = None
     if len(thresholds) > 1:
         node_group_cols = ["participant_id", "subject_id", "matrix_type", "roi_index", "roi"]
         network_group_cols = ["participant_id", "subject_id", "matrix_type"]
@@ -996,6 +998,18 @@ def compute_graph_metrics_from_corrmats(
             group_cols=network_group_cols,
         )
 
+        threshold_span = float(max(thresholds) - min(thresholds))
+        if threshold_span > 0:
+            node_auc_norm_df = node_auc_df.copy()
+            for metric in node_metric_cols:
+                if metric in node_auc_norm_df.columns:
+                    node_auc_norm_df[metric] = node_auc_norm_df[metric] / threshold_span
+
+            network_auc_norm_df = network_auc_df.copy()
+            for metric in network_metric_cols:
+                if metric in network_auc_norm_df.columns:
+                    network_auc_norm_df[metric] = network_auc_norm_df[metric] / threshold_span
+
     metadata = {
         "Description": "Graph metrics computed from ROI-to-ROI correlation matrices",
         "SourceOutputRoot": str(output_root),
@@ -1004,6 +1018,7 @@ def compute_graph_metrics_from_corrmats(
         "QuickMode": bool(quick),
         "PositiveOnlyEdges": bool(positive_only),
         "MatrixTypes": matrix_types,
+        "AUCNormalization": "AUCnorm = AUC / (max(threshold)-min(threshold))",
         "ParticipantsIncludeColumn": participants_include_column,
         "ParticipantsGroupColumn": participants_group_column,
         "GeneratedAt": datetime.now().isoformat(),
@@ -1026,6 +1041,8 @@ def compute_graph_metrics_from_corrmats(
         network_df=network_df,
         node_auc_df=node_auc_df,
         network_auc_df=network_auc_df,
+        node_auc_norm_df=node_auc_norm_df,
+        network_auc_norm_df=network_auc_norm_df,
         metadata=metadata,
     )
 
