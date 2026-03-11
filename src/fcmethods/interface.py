@@ -30,7 +30,10 @@ from .graph_analysis import (
     compute_auc_by_group,
     save_graph_outputs,
 )
-from .graph_visualization import create_graph_metric_summary_figures
+from .graph_visualization import (
+    create_graph_metric_summary_figures,
+    create_edge_prevalence_network_figures,
+)
 
 
 def _infer_roi_labels_from_corrmat_json(
@@ -1040,6 +1043,7 @@ def visualize_graph_metrics(
     participants_group_column: Optional[str] = None,
     matrix_types: Optional[List[str]] = None,
     matrix_display_names: Optional[Dict[str, str]] = None,
+    figure_types: Optional[List[str]] = None,
     dpi: int = 150,
     verbose: bool = True,
 ) -> Dict[str, Path]:
@@ -1060,6 +1064,11 @@ def visualize_graph_metrics(
         Matrix types/conditions to plot. Default: ["intervention", "control"]
     matrix_display_names : dict, optional
         Display names for matrix types (e.g., {"intervention": "NTX", "control": "Placebo"})
+    figure_types : list, optional
+        Which figure families to generate. Supported values:
+        - "graph_metrics": dot+box metric summaries
+        - "edge_prevalence": threshold-wise prevalence networks
+        Default: ["graph_metrics", "edge_prevalence"]
     dpi : int, optional
         Figure DPI. Default: 150
     verbose : bool, optional
@@ -1078,13 +1087,42 @@ def visualize_graph_metrics(
         print("=" * 80)
         print(f"\nGraph directory: {graph_dir}\n")
 
-    output_files = create_graph_metric_summary_figures(
-        graph_dir=graph_dir,
-        participants_group_column=participants_group_column,
-        matrix_types=matrix_types,
-        matrix_display_names=matrix_display_names,
-        dpi=dpi,
-    )
+    if figure_types is None:
+        figure_types = ["graph_metrics", "edge_prevalence"]
+
+    figure_types = [str(ft).strip().lower() for ft in figure_types]
+    valid_figure_types = {"graph_metrics", "edge_prevalence"}
+    invalid_types = [ft for ft in figure_types if ft not in valid_figure_types]
+    if invalid_types:
+        raise ValueError(
+            f"Unsupported figure type(s): {invalid_types}. "
+            f"Supported values are: {sorted(valid_figure_types)}"
+        )
+
+    if verbose:
+        print(f"Figure types: {', '.join(figure_types)}")
+
+    output_files = {}
+
+    if "graph_metrics" in figure_types:
+        metric_output_files = create_graph_metric_summary_figures(
+            graph_dir=graph_dir,
+            participants_group_column=participants_group_column,
+            matrix_types=matrix_types,
+            matrix_display_names=matrix_display_names,
+            dpi=dpi,
+        )
+        output_files.update(metric_output_files)
+
+    if "edge_prevalence" in figure_types:
+        edge_output_files = create_edge_prevalence_network_figures(
+            output_root=output_root,
+            graph_dir=graph_dir,
+            matrix_types=matrix_types,
+            participants_group_column=participants_group_column,
+            dpi=dpi,
+        )
+        output_files.update(edge_output_files)
 
     if verbose:
         print(f"✓ COMPLETE: Created {len(output_files)} graph summary figure(s)")

@@ -33,7 +33,10 @@ from .graph_analysis import (
     compute_network_graph_metrics,
     compute_auc_by_group,
 )
-from .graph_visualization import create_graph_metric_summary_figures
+from .graph_visualization import (
+    create_graph_metric_summary_figures,
+    create_edge_prevalence_network_figures,
+)
 
 __version__ = "0.1.0"
 __all__ = [
@@ -59,4 +62,5 @@ __all__ = [
     "compute_network_graph_metrics",
     "compute_auc_by_group",
     "create_graph_metric_summary_figures",
+    "create_edge_prevalence_network_figures",
 ]
