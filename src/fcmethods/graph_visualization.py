@@ -632,6 +632,207 @@ def create_edge_prevalence_network_figures(
     return output_files
 
 
+def _plot_node_delta_map(
+    ax,
+    roi_labels: List[str],
+    delta_values: np.ndarray,
+    title: str,
+    vlim: float,
+) -> None:
+    """Plot node-level delta values on a circular network map."""
+    n = len(roi_labels)
+    angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    x = np.cos(angles)
+    y = np.sin(angles)
+
+    # Node size reflects absolute change
+    abs_delta = np.abs(delta_values)
+    if np.nanmax(abs_delta) > 0:
+        size_scale = 130.0 * (abs_delta / np.nanmax(abs_delta))
+    else:
+        size_scale = np.zeros_like(abs_delta)
+    node_sizes = 55.0 + size_scale
+
+    sc = ax.scatter(
+        x,
+        y,
+        c=delta_values,
+        cmap="RdBu_r",
+        vmin=-vlim,
+        vmax=vlim,
+        s=node_sizes,
+        edgecolor="black",
+        linewidth=0.8,
+        zorder=3,
+    )
+
+    for i in range(n):
+        ax.text(x[i] * 1.14, y[i] * 1.14, roi_labels[i], fontsize=5.5, ha="center", va="center")
+
+    ax.set_title(title, fontsize=9, fontweight="bold")
+    ax.axis("off")
+    ax.set_aspect("equal")
+    return sc
+
+
+def create_clustering_delta_figures(
+    graph_dir: str,
+    participants_group_column: Optional[str] = None,
+    matrix_types: Optional[List[str]] = None,
+    matrix_display_names: Optional[Dict[str, str]] = None,
+    dpi: int = 150,
+) -> Dict[str, Path]:
+    """
+    Create node-level clustering delta maps (intervention - control).
+
+    Produces:
+    1) Group-level node map of mean clustering coefficient delta
+    2) Subgroup node maps (one panel per subgroup) if group column exists
+    """
+    graph_dir = Path(graph_dir)
+    output_dir = graph_dir / "figures"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    node_df = _load_graph_table(graph_dir, level="node")
+
+    if matrix_types is None:
+        matrix_types = ["intervention", "control"]
+    if len(matrix_types) < 2:
+        raise ValueError("clustering_delta requires at least two matrix types (intervention/control).")
+
+    intervention_label = matrix_types[0]
+    control_label = matrix_types[1]
+
+    if matrix_display_names is None:
+        matrix_display_names = {
+            intervention_label: intervention_label,
+            control_label: control_label,
+        }
+
+    required_cols = ["participant_id", "subject_id", "matrix_type", "roi", "clustering_coefficient"]
+    for col in required_cols:
+        if col not in node_df.columns:
+            raise RuntimeError(f"Node table missing required column for clustering_delta: {col}")
+
+    df = node_df[node_df["matrix_type"].isin([intervention_label, control_label])].copy()
+    if df.empty:
+        raise RuntimeError("No node rows found for requested intervention/control labels.")
+
+    # If raw threshold-wise table is used (no AUC/AUCnorm), average across thresholds first.
+    threshold_cols = ["threshold_mode", "threshold_value", "quick"]
+    group_cols = ["participant_id", "subject_id", "matrix_type", "roi"]
+    if participants_group_column and participants_group_column in df.columns:
+        group_cols.append(participants_group_column)
+    available_group_cols = [c for c in group_cols if c in df.columns]
+
+    if "threshold_value" in df.columns:
+        df = (
+            df.groupby(available_group_cols, dropna=False)["clustering_coefficient"]
+            .mean()
+            .reset_index()
+        )
+
+    # Compute per-subject per-node delta = intervention - control
+    pivot_index = ["participant_id", "subject_id", "roi"]
+    if participants_group_column and participants_group_column in df.columns:
+        pivot_index.append(participants_group_column)
+
+    piv = df.pivot_table(
+        index=pivot_index,
+        columns="matrix_type",
+        values="clustering_coefficient",
+        aggfunc="mean",
+    ).reset_index()
+
+    if intervention_label not in piv.columns or control_label not in piv.columns:
+        raise RuntimeError("Could not compute clustering deltas; missing one of intervention/control columns after pivot.")
+
+    piv["clustering_delta"] = piv[intervention_label] - piv[control_label]
+
+    roi_order = sorted(pd.unique(piv["roi"]))
+    grouped_delta = piv.groupby("roi", dropna=False)["clustering_delta"].mean()
+    group_delta_values = np.array([grouped_delta.get(roi, np.nan) for roi in roi_order], dtype=float)
+
+    # Shared symmetric color scale
+    vlim = float(np.nanmax(np.abs(group_delta_values))) if np.isfinite(np.nanmax(np.abs(group_delta_values))) else 1.0
+    if not np.isfinite(vlim) or vlim <= 0:
+        vlim = 1e-6
+
+    output_files: Dict[str, Path] = {}
+
+    # Group-level figure
+    fig, ax = plt.subplots(figsize=(7.2, 6.6))
+    sc = _plot_node_delta_map(
+        ax=ax,
+        roi_labels=roi_order,
+        delta_values=group_delta_values,
+        title=(
+            f"Clustering Δ ("
+            f"{matrix_display_names.get(intervention_label, intervention_label)} - "
+            f"{matrix_display_names.get(control_label, control_label)}"
+            f")"
+        ),
+        vlim=vlim,
+    )
+    cbar = plt.colorbar(sc, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label("Mean node-level clustering delta", fontsize=9)
+    fig.suptitle("Group clustering coefficient change map", fontsize=12, fontweight="bold")
+    plt.tight_layout()
+    group_path = output_dir / "clusteringdelta_group_node-map.png"
+    fig.savefig(group_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    output_files["clustering_delta_group"] = group_path
+
+    # Subgroup figure
+    if participants_group_column and participants_group_column in piv.columns:
+        sub_df = piv.dropna(subset=[participants_group_column]).copy()
+        if not sub_df.empty:
+            groups = sorted([str(g) for g in pd.unique(sub_df[participants_group_column])])
+            if groups:
+                fig, axes = plt.subplots(len(groups), 1, figsize=(7.6, 6.0 * len(groups)), squeeze=False)
+                axes = axes[:, 0]
+
+                # Compute subgroup deltas first to harmonize color scale
+                subgroup_arrays = {}
+                all_vals = []
+                for group_value in groups:
+                    gdf = sub_df[sub_df[participants_group_column].astype(str) == group_value]
+                    gmean = gdf.groupby("roi", dropna=False)["clustering_delta"].mean()
+                    gvals = np.array([gmean.get(roi, np.nan) for roi in roi_order], dtype=float)
+                    subgroup_arrays[group_value] = gvals
+                    all_vals.append(gvals)
+
+                if all_vals:
+                    concat_vals = np.concatenate(all_vals)
+                    subgroup_vlim = float(np.nanmax(np.abs(concat_vals))) if np.isfinite(np.nanmax(np.abs(concat_vals))) else vlim
+                    if not np.isfinite(subgroup_vlim) or subgroup_vlim <= 0:
+                        subgroup_vlim = vlim
+                else:
+                    subgroup_vlim = vlim
+
+                scatters = []
+                for i, group_value in enumerate(groups):
+                    sc_i = _plot_node_delta_map(
+                        ax=axes[i],
+                        roi_labels=roi_order,
+                        delta_values=subgroup_arrays[group_value],
+                        title=f"{participants_group_column}={group_value}",
+                        vlim=subgroup_vlim,
+                    )
+                    scatters.append(sc_i)
+
+                cbar = plt.colorbar(scatters[-1], ax=axes, fraction=0.02, pad=0.01)
+                cbar.set_label("Mean node-level clustering delta", fontsize=9)
+                fig.suptitle("Subgroup clustering coefficient change maps", fontsize=12, fontweight="bold")
+                plt.tight_layout()
+                subgroup_path = output_dir / "clusteringdelta_by-group_node-map.png"
+                fig.savefig(subgroup_path, dpi=dpi, bbox_inches="tight")
+                plt.close(fig)
+                output_files["clustering_delta_grouped"] = subgroup_path
+
+    return output_files
+
+
 def create_graph_metric_summary_figures(
     graph_dir: str,
     participants_group_column: Optional[str] = None,

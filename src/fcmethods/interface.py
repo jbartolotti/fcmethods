@@ -33,6 +33,7 @@ from .graph_analysis import (
 from .graph_visualization import (
     create_graph_metric_summary_figures,
     create_edge_prevalence_network_figures,
+    create_clustering_delta_figures,
 )
 from .mixed_models import run_network_metric_mixed_models
 
@@ -1089,6 +1090,7 @@ def visualize_graph_metrics(
         Which figure families to generate. Supported values:
         - "graph_metrics": dot+box metric summaries
         - "edge_prevalence": threshold-wise prevalence networks
+        - "clustering_delta": node-level clustering change maps
         Default: ["graph_metrics", "edge_prevalence"]
     edge_prevalence_layouts : list, optional
         Which layouts to use for edge prevalence figures. Supported values:
@@ -1119,7 +1121,7 @@ def visualize_graph_metrics(
         figure_types = ["graph_metrics", "edge_prevalence"]
 
     figure_types = [str(ft).strip().lower() for ft in figure_types]
-    valid_figure_types = {"graph_metrics", "edge_prevalence"}
+    valid_figure_types = {"graph_metrics", "edge_prevalence", "clustering_delta"}
     invalid_types = [ft for ft in figure_types if ft not in valid_figure_types]
     if invalid_types:
         raise ValueError(
@@ -1154,6 +1156,16 @@ def visualize_graph_metrics(
             dpi=dpi,
         )
         output_files.update(edge_output_files)
+
+    if "clustering_delta" in figure_types:
+        clustering_delta_outputs = create_clustering_delta_figures(
+            graph_dir=graph_dir,
+            participants_group_column=participants_group_column,
+            matrix_types=matrix_types,
+            matrix_display_names=matrix_display_names,
+            dpi=dpi,
+        )
+        output_files.update(clustering_delta_outputs)
 
     if verbose:
         print(f"✓ COMPLETE: Created {len(output_files)} graph summary figure(s)")

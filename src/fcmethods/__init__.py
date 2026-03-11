@@ -37,6 +37,7 @@ from .graph_analysis import (
 from .graph_visualization import (
     create_graph_metric_summary_figures,
     create_edge_prevalence_network_figures,
+    create_clustering_delta_figures,
 )
 
 __version__ = "0.1.0"
@@ -65,4 +66,5 @@ __all__ = [
     "compute_auc_by_group",
     "create_graph_metric_summary_figures",
     "create_edge_prevalence_network_figures",
+    "create_clustering_delta_figures",
 ]
