@@ -12,6 +12,7 @@ from .interface import (
     visualize_correlation_matrices,
     compute_graph_metrics_from_corrmats,
     visualize_graph_metrics,
+    run_network_metric_mixed_effects,
 )
 from .network_analysis import (
     fisher_z_transform,
@@ -52,6 +53,7 @@ __all__ = [
     "compute_group_correlation_matrices",
     "compute_graph_metrics_from_corrmats",
     "visualize_graph_metrics",
+    "run_network_metric_mixed_effects",
     "plot_correlation_matrices",
     "visualize_subject_corrmat",
     "visualize_group_corrmat",

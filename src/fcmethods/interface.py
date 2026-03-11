@@ -34,6 +34,7 @@ from .graph_visualization import (
     create_graph_metric_summary_figures,
     create_edge_prevalence_network_figures,
 )
+from .mixed_models import run_network_metric_mixed_models
 
 
 def _infer_roi_labels_from_corrmat_json(
@@ -1157,5 +1158,47 @@ def visualize_graph_metrics(
     if verbose:
         print(f"✓ COMPLETE: Created {len(output_files)} graph summary figure(s)")
         print(f"Output location: {graph_dir / 'figures'}")
+
+    return output_files
+
+
+def run_network_metric_mixed_effects(
+    output_root: str,
+    condition_column: str = "matrix_type",
+    intervention_label: str = "intervention",
+    control_label: str = "control",
+    subject_column: str = "subject_id",
+    metrics: Optional[List[str]] = None,
+    dpi: int = 150,
+    verbose: bool = True,
+) -> Dict[str, Path]:
+    """
+    Run mixed-effects models for each network metric with centered condition contrast.
+
+    Condition coding is fixed to:
+    - +0.5 for intervention
+    - -0.5 for control
+    """
+    if verbose:
+        print("=" * 80)
+        print("Running Network Metric Mixed-Effects Models")
+        print("=" * 80)
+        print(f"\nOutput root: {output_root}")
+        print(f"Condition contrast: {intervention_label}=+0.5, {control_label}=-0.5\n")
+
+    output_files = run_network_metric_mixed_models(
+        output_root=output_root,
+        condition_column=condition_column,
+        intervention_label=intervention_label,
+        control_label=control_label,
+        subject_column=subject_column,
+        metrics=metrics,
+        dpi=dpi,
+    )
+
+    if verbose:
+        print(f"✓ COMPLETE: Created {len(output_files)} mixed-model output file(s)")
+        for name, path in output_files.items():
+            print(f"  {name}: {path}")
 
     return output_files
