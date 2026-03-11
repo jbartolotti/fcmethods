@@ -962,7 +962,7 @@ def compute_graph_metrics_from_corrmats(
     if node_df.empty or network_df.empty:
         raise RuntimeError("No graph metrics were computed. Check matrix types and subject inputs.")
 
-    metric_cols = [
+    node_metric_cols = [
         "degree",
         "cost",
         "avg_path_distance",
@@ -971,6 +971,7 @@ def compute_graph_metrics_from_corrmats(
         "local_efficiency",
         "betweenness_centrality",
     ]
+    network_metric_cols = node_metric_cols + ["modularity"]
 
     node_auc_df = None
     network_auc_df = None
@@ -985,13 +986,13 @@ def compute_graph_metrics_from_corrmats(
         node_auc_df = compute_auc_by_group(
             df=node_df,
             threshold_col="threshold_value",
-            metric_cols=metric_cols,
+            metric_cols=node_metric_cols,
             group_cols=node_group_cols,
         )
         network_auc_df = compute_auc_by_group(
             df=network_df,
             threshold_col="threshold_value",
-            metric_cols=metric_cols,
+            metric_cols=network_metric_cols,
             group_cols=network_group_cols,
         )
 
@@ -1014,6 +1015,7 @@ def compute_graph_metrics_from_corrmats(
             "global_efficiency": "Average inverse shortest-path distance to all other nodes",
             "local_efficiency": "Global efficiency of node neighborhood subgraph",
             "betweenness_centrality": "Proportion of shortest paths passing through each node",
+            "modularity": "Community structure strength estimated from greedy modularity optimization",
         },
     }
 
@@ -1044,6 +1046,7 @@ def visualize_graph_metrics(
     matrix_types: Optional[List[str]] = None,
     matrix_display_names: Optional[Dict[str, str]] = None,
     figure_types: Optional[List[str]] = None,
+    edge_prevalence_layouts: Optional[List[str]] = None,
     dpi: int = 150,
     verbose: bool = True,
 ) -> Dict[str, Path]:
@@ -1069,6 +1072,13 @@ def visualize_graph_metrics(
         - "graph_metrics": dot+box metric summaries
         - "edge_prevalence": threshold-wise prevalence networks
         Default: ["graph_metrics", "edge_prevalence"]
+    edge_prevalence_layouts : list, optional
+        Which layouts to use for edge prevalence figures. Supported values:
+        - "circle"
+        - "clustered_circle"
+        - "community"
+        - "force_fixed"
+        Default: all supported layouts.
     dpi : int, optional
         Figure DPI. Default: 150
     verbose : bool, optional
@@ -1101,6 +1111,8 @@ def visualize_graph_metrics(
 
     if verbose:
         print(f"Figure types: {', '.join(figure_types)}")
+        if "edge_prevalence" in figure_types and edge_prevalence_layouts is not None:
+            print(f"Edge prevalence layouts: {', '.join(edge_prevalence_layouts)}")
 
     output_files = {}
 
@@ -1120,6 +1132,7 @@ def visualize_graph_metrics(
             graph_dir=graph_dir,
             matrix_types=matrix_types,
             participants_group_column=participants_group_column,
+            layout_types=edge_prevalence_layouts,
             dpi=dpi,
         )
         output_files.update(edge_output_files)

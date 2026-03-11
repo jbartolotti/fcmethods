@@ -9,6 +9,9 @@ import json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import networkx as nx
+from scipy.cluster.hierarchy import linkage, leaves_list
+from scipy.spatial.distance import pdist
 
 from .graph_analysis import build_adjacency_from_corrmat
 
@@ -21,6 +24,14 @@ GRAPH_METRIC_COLUMNS = [
     "global_efficiency",
     "local_efficiency",
     "betweenness_centrality",
+    "modularity",
+]
+
+EDGE_PREVALENCE_LAYOUT_TYPES = [
+    "circle",
+    "clustered_circle",
+    "community",
+    "force_fixed",
 ]
 
 
@@ -236,17 +247,197 @@ def _plot_prevalence_network(ax, prevalence: np.ndarray, roi_labels: List[str], 
     ax.set_aspect("equal")
 
 
+def _compute_mean_prevalence_matrix(
+    output_root: Path,
+    subjects: List[str],
+    matrix_type: str,
+    threshold_mode: str,
+    thresholds: List[float],
+    positive_only: bool,
+) -> np.ndarray:
+    """Compute a mean prevalence matrix across thresholds for layout estimation."""
+    prevalence_accumulator = None
+    n_thresholds_used = 0
+
+    for thr in thresholds:
+        threshold_sum = None
+        n_used = 0
+        for sid in subjects:
+            mat_path = output_root / f"sub-{sid}" / f"corrmat_{matrix_type}.npy"
+            if not mat_path.exists():
+                continue
+            mat = np.load(mat_path)
+            if threshold_sum is None:
+                threshold_sum = np.zeros_like(mat, dtype=float)
+            if mat.shape != threshold_sum.shape:
+                continue
+            adj = build_adjacency_from_corrmat(
+                matrix=mat,
+                threshold_mode=threshold_mode,
+                threshold_value=thr,
+                positive_only=positive_only,
+            )
+            threshold_sum += adj
+            n_used += 1
+
+        if threshold_sum is not None and n_used > 0:
+            prevalence = threshold_sum / float(n_used)
+            if prevalence_accumulator is None:
+                prevalence_accumulator = np.zeros_like(prevalence, dtype=float)
+            prevalence_accumulator += prevalence
+            n_thresholds_used += 1
+
+    if prevalence_accumulator is None or n_thresholds_used == 0:
+        raise RuntimeError(f"Could not compute mean prevalence matrix for {matrix_type}")
+
+    return prevalence_accumulator / float(n_thresholds_used)
+
+
+def _compute_circle_positions(n_rois: int, order: Optional[List[int]] = None) -> Dict[int, np.ndarray]:
+    """Return circular node positions using optional node order."""
+    if order is None:
+        order = list(range(n_rois))
+    angles = np.linspace(0, 2 * np.pi, n_rois, endpoint=False)
+    pos = {}
+    for angle, node_idx in zip(angles, order):
+        pos[node_idx] = np.array([np.cos(angle), np.sin(angle)])
+    return pos
+
+
+def _compute_clustered_circle_order(prevalence: np.ndarray) -> List[int]:
+    """Order nodes on a circle using hierarchical clustering of connectivity profiles."""
+    n_rois = prevalence.shape[0]
+    if n_rois <= 2:
+        return list(range(n_rois))
+
+    profiles = prevalence.copy()
+    np.fill_diagonal(profiles, 0.0)
+
+    try:
+        distances = pdist(profiles, metric="euclidean")
+        if np.allclose(distances, 0):
+            return list(range(n_rois))
+        linkage_matrix = linkage(distances, method="average")
+        return leaves_list(linkage_matrix).tolist()
+    except Exception:
+        return list(range(n_rois))
+
+
+def _compute_force_fixed_positions(prevalence: np.ndarray) -> Dict[int, np.ndarray]:
+    """Compute a single force-directed layout from weighted prevalence graph."""
+    graph = nx.from_numpy_array(prevalence)
+    if graph.number_of_nodes() == 0:
+        return {}
+    return nx.spring_layout(graph, weight="weight", seed=42)
+
+
+def _compute_community_layout(prevalence: np.ndarray) -> Dict[int, np.ndarray]:
+    """Compute a modular/community layout from weighted prevalence graph."""
+    graph = nx.from_numpy_array(prevalence)
+    n_rois = prevalence.shape[0]
+    if graph.number_of_edges() == 0:
+        return _compute_circle_positions(n_rois)
+
+    communities = list(nx.algorithms.community.greedy_modularity_communities(graph, weight="weight"))
+    if len(communities) == 0:
+        return _compute_circle_positions(n_rois)
+
+    community_angles = np.linspace(0, 2 * np.pi, len(communities), endpoint=False)
+    community_centers = {
+        idx: np.array([1.8 * np.cos(angle), 1.8 * np.sin(angle)])
+        for idx, angle in enumerate(community_angles)
+    }
+
+    pos = {}
+    for community_idx, community_nodes in enumerate(communities):
+        subgraph = graph.subgraph(sorted(community_nodes)).copy()
+        if subgraph.number_of_nodes() == 1:
+            node = next(iter(subgraph.nodes()))
+            pos[node] = community_centers[community_idx]
+            continue
+
+        sub_pos = nx.spring_layout(subgraph, weight="weight", seed=42)
+        sub_pos_array = np.array([sub_pos[node] for node in subgraph.nodes()])
+        sub_pos_center = sub_pos_array.mean(axis=0)
+
+        for node in subgraph.nodes():
+            centered = np.array(sub_pos[node]) - sub_pos_center
+            pos[node] = community_centers[community_idx] + 0.65 * centered
+
+    # Ensure every node has a position
+    for node_idx in range(n_rois):
+        pos.setdefault(node_idx, np.array([0.0, 0.0]))
+
+    return pos
+
+
+def _get_layout_spec(prevalence: np.ndarray, layout_type: str) -> Dict:
+    """Create plotting spec for a requested layout type."""
+    n_rois = prevalence.shape[0]
+    if layout_type == "circle":
+        return {"positions": _compute_circle_positions(n_rois), "label_positions": None}
+    if layout_type == "clustered_circle":
+        order = _compute_clustered_circle_order(prevalence)
+        return {"positions": _compute_circle_positions(n_rois, order=order), "label_positions": None}
+    if layout_type == "force_fixed":
+        positions = _compute_force_fixed_positions(prevalence)
+        return {"positions": positions, "label_positions": None}
+    if layout_type == "community":
+        positions = _compute_community_layout(prevalence)
+        return {"positions": positions, "label_positions": None}
+    raise ValueError(f"Unsupported layout_type: {layout_type}")
+
+
+def _plot_prevalence_network_with_layout(
+    ax,
+    prevalence: np.ndarray,
+    roi_labels: List[str],
+    title: str,
+    layout_spec: Dict,
+) -> None:
+    """Plot prevalence network with externally supplied node layout."""
+    positions = layout_spec["positions"]
+
+    for i in range(prevalence.shape[0]):
+        for j in range(i + 1, prevalence.shape[1]):
+            w = float(prevalence[i, j])
+            if w <= 0:
+                continue
+            ax.plot(
+                [positions[i][0], positions[j][0]],
+                [positions[i][1], positions[j][1]],
+                color="black",
+                alpha=min(0.95, max(0.08, w)),
+                linewidth=0.4 + 2.8 * w,
+                zorder=1,
+            )
+
+    xs = [positions[i][0] for i in range(prevalence.shape[0])]
+    ys = [positions[i][1] for i in range(prevalence.shape[0])]
+    ax.scatter(xs, ys, s=65, color="white", edgecolor="black", linewidth=1.0, zorder=3)
+
+    for i, label in enumerate(roi_labels):
+        x, y = positions[i]
+        norm = max(np.sqrt(x**2 + y**2), 1e-6)
+        ax.text(x + 0.12 * x / norm, y + 0.12 * y / norm, label, fontsize=5.5, ha="center", va="center")
+
+    ax.set_title(title, fontsize=9, fontweight="bold")
+    ax.axis("off")
+    ax.set_aspect("equal")
+
+
 def create_edge_prevalence_network_figures(
     output_root: str,
     graph_dir: str,
     matrix_types: Optional[List[str]] = None,
     participants_group_column: Optional[str] = None,
+    layout_types: Optional[List[str]] = None,
     dpi: int = 150,
 ) -> Dict[str, Path]:
     """
     Create threshold-wise edge-prevalence network plots.
 
-    Produces:
+    Produces one figure family per requested layout type:
     1) One figure per matrix type, single row with one panel per threshold
     2) One figure per matrix type with subgroup rows and threshold columns
     """
@@ -269,6 +460,17 @@ def create_edge_prevalence_network_figures(
 
     if matrix_types is None:
         matrix_types = list(pd.unique(network_df["matrix_type"]))
+
+    if layout_types is None:
+        layout_types = list(EDGE_PREVALENCE_LAYOUT_TYPES)
+
+    layout_types = [str(layout).strip().lower() for layout in layout_types]
+    invalid_layouts = [layout for layout in layout_types if layout not in EDGE_PREVALENCE_LAYOUT_TYPES]
+    if invalid_layouts:
+        raise ValueError(
+            f"Unsupported edge prevalence layout(s): {invalid_layouts}. "
+            f"Supported values are: {EDGE_PREVALENCE_LAYOUT_TYPES}"
+        )
 
     output_files: Dict[str, Path] = {}
     out_dir = graph_dir / "figures"
@@ -293,118 +495,136 @@ def create_edge_prevalence_network_figures(
         n_rois = sample_mat.shape[0]
         roi_labels = _get_roi_labels_for_matrix(output_root, matrix_type, subjects, n_rois)
 
-        # ------------------------------
-        # Overall row (all subjects)
-        # ------------------------------
-        fig, axes = plt.subplots(1, len(thresholds), figsize=(4.8 * len(thresholds), 5.2), squeeze=False)
+        mean_prevalence = _compute_mean_prevalence_matrix(
+            output_root=output_root,
+            subjects=subjects,
+            matrix_type=matrix_type,
+            threshold_mode=threshold_mode,
+            thresholds=thresholds,
+            positive_only=positive_only,
+        )
 
-        for col_idx, thr in enumerate(thresholds):
-            prevalence_sum = np.zeros((n_rois, n_rois), dtype=float)
-            n_used = 0
+        for layout_type in layout_types:
+            layout_spec = _get_layout_spec(mean_prevalence, layout_type)
 
-            for sid in subjects:
-                mat_path = output_root / f"sub-{sid}" / f"corrmat_{matrix_type}.npy"
-                if not mat_path.exists():
-                    continue
-                mat = np.load(mat_path)
-                if mat.shape != prevalence_sum.shape:
-                    continue
-                adj = build_adjacency_from_corrmat(
-                    matrix=mat,
-                    threshold_mode=threshold_mode,
-                    threshold_value=thr,
-                    positive_only=positive_only,
+            # ------------------------------
+            # Overall row (all subjects)
+            # ------------------------------
+            fig, axes = plt.subplots(1, len(thresholds), figsize=(4.8 * len(thresholds), 5.2), squeeze=False)
+
+            for col_idx, thr in enumerate(thresholds):
+                prevalence_sum = np.zeros((n_rois, n_rois), dtype=float)
+                n_used = 0
+
+                for sid in subjects:
+                    mat_path = output_root / f"sub-{sid}" / f"corrmat_{matrix_type}.npy"
+                    if not mat_path.exists():
+                        continue
+                    mat = np.load(mat_path)
+                    if mat.shape != prevalence_sum.shape:
+                        continue
+                    adj = build_adjacency_from_corrmat(
+                        matrix=mat,
+                        threshold_mode=threshold_mode,
+                        threshold_value=thr,
+                        positive_only=positive_only,
+                    )
+                    prevalence_sum += adj
+                    n_used += 1
+
+                if n_used > 0:
+                    prevalence = prevalence_sum / float(n_used)
+                else:
+                    prevalence = prevalence_sum
+
+                ax = axes[0, col_idx]
+                _plot_prevalence_network_with_layout(
+                    ax=ax,
+                    prevalence=prevalence,
+                    roi_labels=roi_labels,
+                    title=f"{matrix_type} | {threshold_mode}={thr:.2f}\nN={n_used}",
+                    layout_spec=layout_spec,
                 )
-                prevalence_sum += adj
-                n_used += 1
 
-            if n_used > 0:
-                prevalence = prevalence_sum / float(n_used)
-            else:
-                prevalence = prevalence_sum
-
-            ax = axes[0, col_idx]
-            _plot_prevalence_network(
-                ax=ax,
-                prevalence=prevalence,
-                roi_labels=roi_labels,
-                title=f"{matrix_type} | {threshold_mode}={thr:.2f}\nN={n_used}",
+            fig.suptitle(
+                f"Edge prevalence network: {matrix_type} ({layout_type})",
+                fontsize=12,
+                fontweight="bold",
             )
+            plt.tight_layout()
+            overall_path = out_dir / f"edgeprevalence_{matrix_type}_{layout_type}_by-threshold.png"
+            fig.savefig(overall_path, dpi=dpi, bbox_inches="tight")
+            plt.close(fig)
+            output_files[f"edgeprevalence_{matrix_type}_{layout_type}_overall"] = overall_path
 
-        fig.suptitle(f"Edge prevalence network: {matrix_type}", fontsize=12, fontweight="bold")
-        plt.tight_layout()
-        overall_path = out_dir / f"edgeprevalence_{matrix_type}_by-threshold.png"
-        fig.savefig(overall_path, dpi=dpi, bbox_inches="tight")
-        plt.close(fig)
-        output_files[f"edgeprevalence_{matrix_type}_overall"] = overall_path
-
-        # ------------------------------
-        # Subgroup rows
-        # ------------------------------
-        if participants_group_column and participants_group_column in mt_df.columns:
-            group_df = mt_df.dropna(subset=[participants_group_column]).copy()
-            if not group_df.empty:
-                groups = sorted([str(g) for g in pd.unique(group_df[participants_group_column])])
-                fig, axes = plt.subplots(
-                    len(groups),
-                    len(thresholds),
-                    figsize=(4.8 * len(thresholds), 4.6 * len(groups)),
-                    squeeze=False,
-                )
-
-                for row_idx, group_value in enumerate(groups):
-                    grp_subjects = sorted(
-                        [
-                            str(s)
-                            for s in pd.unique(
-                                group_df.loc[group_df[participants_group_column].astype(str) == group_value, "subject_id"]
-                            )
-                        ]
+            # ------------------------------
+            # Subgroup rows
+            # ------------------------------
+            if participants_group_column and participants_group_column in mt_df.columns:
+                group_df = mt_df.dropna(subset=[participants_group_column]).copy()
+                if not group_df.empty:
+                    groups = sorted([str(g) for g in pd.unique(group_df[participants_group_column])])
+                    fig, axes = plt.subplots(
+                        len(groups),
+                        len(thresholds),
+                        figsize=(4.8 * len(thresholds), 4.6 * len(groups)),
+                        squeeze=False,
                     )
 
-                    for col_idx, thr in enumerate(thresholds):
-                        prevalence_sum = np.zeros((n_rois, n_rois), dtype=float)
-                        n_used = 0
-
-                        for sid in grp_subjects:
-                            mat_path = output_root / f"sub-{sid}" / f"corrmat_{matrix_type}.npy"
-                            if not mat_path.exists():
-                                continue
-                            mat = np.load(mat_path)
-                            if mat.shape != prevalence_sum.shape:
-                                continue
-                            adj = build_adjacency_from_corrmat(
-                                matrix=mat,
-                                threshold_mode=threshold_mode,
-                                threshold_value=thr,
-                                positive_only=positive_only,
-                            )
-                            prevalence_sum += adj
-                            n_used += 1
-
-                        if n_used > 0:
-                            prevalence = prevalence_sum / float(n_used)
-                        else:
-                            prevalence = prevalence_sum
-
-                        ax = axes[row_idx, col_idx]
-                        _plot_prevalence_network(
-                            ax=ax,
-                            prevalence=prevalence,
-                            roi_labels=roi_labels,
-                            title=f"{group_value} | {threshold_mode}={thr:.2f}\nN={n_used}",
+                    for row_idx, group_value in enumerate(groups):
+                        grp_subjects = sorted(
+                            [
+                                str(s)
+                                for s in pd.unique(
+                                    group_df.loc[group_df[participants_group_column].astype(str) == group_value, "subject_id"]
+                                )
+                            ]
                         )
 
-                fig.suptitle(
-                    f"Edge prevalence by subgroup: {matrix_type} ({participants_group_column})",
-                    fontsize=12,
-                    fontweight="bold",
-                )
-                plt.tight_layout()
-                subgroup_path = out_dir / f"edgeprevalence_{matrix_type}_by-group-threshold.png"
-                fig.savefig(subgroup_path, dpi=dpi, bbox_inches="tight")
-                plt.close(fig)
-                output_files[f"edgeprevalence_{matrix_type}_group"] = subgroup_path
+                        for col_idx, thr in enumerate(thresholds):
+                            prevalence_sum = np.zeros((n_rois, n_rois), dtype=float)
+                            n_used = 0
+
+                            for sid in grp_subjects:
+                                mat_path = output_root / f"sub-{sid}" / f"corrmat_{matrix_type}.npy"
+                                if not mat_path.exists():
+                                    continue
+                                mat = np.load(mat_path)
+                                if mat.shape != prevalence_sum.shape:
+                                    continue
+                                adj = build_adjacency_from_corrmat(
+                                    matrix=mat,
+                                    threshold_mode=threshold_mode,
+                                    threshold_value=thr,
+                                    positive_only=positive_only,
+                                )
+                                prevalence_sum += adj
+                                n_used += 1
+
+                            if n_used > 0:
+                                prevalence = prevalence_sum / float(n_used)
+                            else:
+                                prevalence = prevalence_sum
+
+                            ax = axes[row_idx, col_idx]
+                            _plot_prevalence_network_with_layout(
+                                ax=ax,
+                                prevalence=prevalence,
+                                roi_labels=roi_labels,
+                                title=f"{group_value} | {threshold_mode}={thr:.2f}\nN={n_used}",
+                                layout_spec=layout_spec,
+                            )
+
+                    fig.suptitle(
+                        f"Edge prevalence by subgroup: {matrix_type} ({participants_group_column}, {layout_type})",
+                        fontsize=12,
+                        fontweight="bold",
+                    )
+                    plt.tight_layout()
+                    subgroup_path = out_dir / f"edgeprevalence_{matrix_type}_{layout_type}_by-group-threshold.png"
+                    fig.savefig(subgroup_path, dpi=dpi, bbox_inches="tight")
+                    plt.close(fig)
+                    output_files[f"edgeprevalence_{matrix_type}_{layout_type}_group"] = subgroup_path
 
     return output_files
 

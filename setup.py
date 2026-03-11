@@ -14,6 +14,7 @@ setup(
         "numpy>=1.18.0",
         "scipy>=1.6.0",
         "matplotlib>=3.3.0",
+        "networkx>=2.6.0",
     ],
     extras_require={
         "dev": ["pytest>=6.0", "black>=21.0", "flake8>=3.9"],

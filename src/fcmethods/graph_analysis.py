@@ -15,6 +15,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import networkx as nx
 from scipy.sparse.csgraph import shortest_path, connected_components
 
 
@@ -239,6 +240,13 @@ def compute_network_graph_metrics(adjacency: np.ndarray, node_metrics: Optional[
 
     n_components, _ = connected_components(a, directed=False, return_labels=True)
 
+    graph = nx.from_numpy_array(a)
+    if graph.number_of_edges() == 0:
+        modularity = 0.0
+    else:
+        communities = list(nx.algorithms.community.greedy_modularity_communities(graph))
+        modularity = float(nx.algorithms.community.modularity(graph, communities))
+
     return {
         "n_nodes": int(n),
         "n_edges": n_edges,
@@ -251,6 +259,7 @@ def compute_network_graph_metrics(adjacency: np.ndarray, node_metrics: Optional[
         "global_efficiency": float(np.nanmean(node_metrics["global_efficiency"])),
         "local_efficiency": float(np.nanmean(node_metrics["local_efficiency"])),
         "betweenness_centrality": float(np.nanmean(node_metrics["betweenness_centrality"])),
+        "modularity": modularity,
     }
 
 
